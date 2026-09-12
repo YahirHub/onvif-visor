@@ -15,7 +15,10 @@ func (m *Manager) Trigger(cameraID, streamURI string, postRoll time.Duration) (R
 	}
 	m.mu.Lock()
 	if rec, ok := m.recorders[cameraID]; ok {
-		rec.stopAfter = time.Now().Add(postRoll)
+		candidateStop := time.Now().Add(postRoll)
+		if candidateStop.After(rec.stopAfter) {
+			rec.stopAfter = candidateStop
+		}
 		status := RecordingStatus{
 			CameraID: cameraID, Active: true, Path: rec.path,
 			StartedAt: rec.startedAt, StopAfter: rec.stopAfter,
@@ -34,9 +37,14 @@ func (m *Manager) Trigger(cameraID, streamURI string, postRoll time.Duration) (R
 	cmd := exec.Command(m.ffmpeg,
 		"-hide_banner", "-loglevel", "error",
 		"-rtsp_transport", "tcp",
+		"-fflags", "+genpts",
 		"-i", streamURI,
 		"-map", "0:v:0", "-map", "0:a?",
 		"-c", "copy",
+		"-flush_packets", "1",
+		"-cluster_time_limit", "1000",
+		"-cluster_size_limit", "1048576",
+		"-f", "matroska",
 		"-y", path,
 	)
 	cmd.Stdout = io.Discard
@@ -45,6 +53,7 @@ func (m *Manager) Trigger(cameraID, streamURI string, postRoll time.Duration) (R
 		m.mu.Unlock()
 		return RecordingStatus{}, fmt.Errorf("start ffmpeg recording: %w", err)
 	}
+	_ = syncParentDirectory(path)
 	rec := &recording{
 		cameraID:  cameraID,
 		path:      path,
@@ -52,10 +61,12 @@ func (m *Manager) Trigger(cameraID, streamURI string, postRoll time.Duration) (R
 		stopAfter: time.Now().Add(postRoll),
 		cmd:       cmd,
 		done:      make(chan error, 1),
+		closed:    make(chan struct{}),
 	}
 	m.recorders[cameraID] = rec
 	m.mu.Unlock()
 
+	go m.syncRecordingFile(rec)
 	go m.monitorRecording(rec)
 	return RecordingStatus{
 		CameraID: cameraID, Active: true, Path: path,
@@ -83,7 +94,7 @@ func (m *Manager) monitorRecording(rec *recording) {
 		select {
 		case <-rec.done:
 			timer.Stop()
-			m.removeRecorder(rec)
+			m.finalizeRecording(rec)
 			return
 		case <-timer.C:
 			m.mu.Lock()
@@ -93,7 +104,7 @@ func (m *Manager) monitorRecording(rec *recording) {
 				continue
 			}
 			m.stopProcess(rec)
-			m.removeRecorder(rec)
+			m.finalizeRecording(rec)
 			return
 		}
 	}
@@ -124,13 +135,39 @@ func (m *Manager) removeRecorder(rec *recording) {
 	}
 }
 
+func (m *Manager) finalizeRecording(rec *recording) {
+	rec.finalizeOnce.Do(func() {
+		close(rec.closed)
+		m.removeRecorder(rec)
+		m.queueCompression(rec.path)
+	})
+}
+
+func (m *Manager) syncRecordingFile(rec *recording) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-rec.closed:
+			return
+		case <-ticker.C:
+			file, err := os.OpenFile(rec.path, os.O_RDWR, 0)
+			if err != nil {
+				continue
+			}
+			_ = file.Sync()
+			_ = file.Close()
+		}
+	}
+}
+
 func (m *Manager) Stop(cameraID string) {
 	m.mu.Lock()
 	rec := m.recorders[cameraID]
 	m.mu.Unlock()
 	if rec != nil {
 		m.stopProcess(rec)
-		m.removeRecorder(rec)
+		m.finalizeRecording(rec)
 	}
 }
 
@@ -143,7 +180,7 @@ func (m *Manager) StopAll() {
 	m.mu.Unlock()
 	for _, rec := range recs {
 		m.stopProcess(rec)
-		m.removeRecorder(rec)
+		m.finalizeRecording(rec)
 	}
 }
 

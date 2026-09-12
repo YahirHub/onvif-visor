@@ -7,6 +7,7 @@ const state = {
   recordingCameraID: '',
   recordingDate: '',
   snapshotRevision: Date.now(),
+  pendingPlayback: null,
   playback: { recording: null, offset: 0, startedAt: 0, timer: null, playing: false },
 };
 
@@ -37,6 +38,7 @@ const emptyState = $('#emptyState');
 const cameraCount = $('#cameraCount');
 const cameraSearch = $('#cameraSearch');
 const cameraDialog = $('#cameraDialog');
+const scheduleDialog = $('#scheduleDialog');
 const discoveryDialog = $('#discoveryDialog');
 const confirmDialog = $('#confirmDialog');
 const monitorStage = $('#monitorStage');
@@ -46,29 +48,71 @@ const pickerList = $('#pickerList');
 const pickerSearch = $('#pickerSearch');
 
 const viewMeta = {
-  cameras: {
-    eyebrow: 'MONITOREO',
-    title: 'Cámaras',
-    subtitle: 'Selecciona una cámara para abrir su transmisión en tiempo real.',
-  },
-  monitor: {
-    eyebrow: 'CENTRO DE MONITOREO',
-    title: 'Vista en vivo',
-    subtitle: 'Combina hasta 9 cámaras en un layout que se adapta automáticamente.',
-  },
-  recordings: {
-    eyebrow: 'ALMACENAMIENTO',
-    title: 'Grabaciones',
-    subtitle: 'Consulta el historial de vídeo almacenado por cámara.',
-  },
-  events: {
-    eyebrow: 'ACTIVIDAD',
-    title: 'Eventos',
-    subtitle: 'Revisa eventos ONVIF y disparadores de grabación recientes.',
-  },
+  cameras: { eyebrow: 'MONITOREO', title: 'Cámaras', subtitle: 'Selecciona una cámara para abrirla.' },
+  monitor: { eyebrow: 'MONITOREO', title: 'Multivista', subtitle: 'Vista en vivo.' },
+  recordings: { eyebrow: 'ARCHIVO', title: 'Grabaciones', subtitle: 'Historial de vídeo por cámara.' },
+  events: { eyebrow: 'ACTIVIDAD', title: 'Eventos', subtitle: 'Movimiento y eventos recientes.' },
 };
 
+const routePathByView = {
+  cameras: '/camaras',
+  monitor: '/multivista',
+  recordings: '/grabaciones',
+  events: '/eventos',
+};
+
+function setBrowserRoute(path, { replace = false } = {}) {
+  if (!path || window.location.pathname === path) return;
+  window.history[replace ? 'replaceState' : 'pushState']({}, '', path);
+}
+
+function parseCurrentRoute() {
+  let path = window.location.pathname || '/';
+  while (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+
+  if (path === '/') return { view: 'cameras', canonicalPath: '/camaras', replace: true };
+  if (path === '/camaras') return { view: 'cameras' };
+  if (path === '/multivista') return { view: 'monitor' };
+  if (path === '/grabaciones') return { view: 'recordings', clearRecordingCamera: true };
+  if (path === '/eventos') return { view: 'events' };
+
+  if (path.startsWith('/camara/')) {
+    const cameraID = path.slice('/camara/'.length);
+    if (cameraID && !cameraID.includes('/')) return { view: 'monitor', cameraID: decodeURIComponent(cameraID) };
+  }
+  if (path.startsWith('/grabaciones/')) {
+    const recordingCameraID = path.slice('/grabaciones/'.length);
+    if (recordingCameraID && !recordingCameraID.includes('/')) {
+      return { view: 'recordings', recordingCameraID: decodeURIComponent(recordingCameraID) };
+    }
+  }
+
+  return { view: 'cameras', canonicalPath: '/camaras', replace: true };
+}
+
+function applyCurrentRoute() {
+  const route = parseCurrentRoute();
+  if (route.cameraID) {
+    if (!state.cameras.some(camera => camera.id === route.cameraID)) {
+      navigate('cameras', { replace: true });
+      return;
+    }
+    state.monitorSelected = [route.cameraID];
+  }
+  if (route.clearRecordingCamera) state.recordingCameraID = '';
+  if (route.recordingCameraID) {
+    if (!state.cameras.some(camera => camera.id === route.recordingCameraID)) {
+      navigate('recordings', { replace: true });
+      return;
+    }
+    state.recordingCameraID = route.recordingCameraID;
+  }
+  if (route.canonicalPath) setBrowserRoute(route.canonicalPath, { replace: route.replace });
+  navigate(route.view, { fromHistory: true });
+}
+
 let eventsTimer = null;
+let camerasTimer = null;
 
 class SessionRequiredError extends Error {}
 
@@ -123,6 +167,7 @@ function closeDialogs() {
 
 function stopMonitorStreams() {
   for (const image of $$('.monitor-live-image', monitorStage)) image.removeAttribute('src');
+  monitorStage.replaceChildren();
 }
 
 function stopEventPolling() {
@@ -132,11 +177,25 @@ function stopEventPolling() {
   }
 }
 
+function stopCameraPolling() {
+  if (camerasTimer !== null) {
+    clearInterval(camerasTimer);
+    camerasTimer = null;
+  }
+}
+
 function startEventPolling() {
   stopEventPolling();
   eventsTimer = setInterval(() => {
     if (!appView.hidden && state.auth.authenticated !== false) refreshEvents(false);
-  }, 10000);
+  }, 2500);
+}
+
+function startCameraPolling() {
+  stopCameraPolling();
+  camerasTimer = setInterval(() => {
+    if (!appView.hidden && state.auth.authenticated !== false) refreshCamerasRealtime();
+  }, 4000);
 }
 
 function setStatus(message, ok = true) {
@@ -149,6 +208,7 @@ function showLogin(message = '') {
   closeDialogs();
   stopMonitorStreams();
   stopEventPolling();
+  stopCameraPolling();
   if (state.auth.required) state.auth.authenticated = false;
   bootView.hidden = true;
   appView.hidden = true;
@@ -168,6 +228,7 @@ function showApp() {
   loginError.textContent = '';
   loginMessage.textContent = '';
   startEventPolling();
+  startCameraPolling();
 }
 
 function showBootError(message) {
@@ -181,6 +242,7 @@ function showBootError(message) {
 
 async function bootstrap() {
   stopEventPolling();
+  stopCameraPolling();
   bootView.hidden = false;
   loginView.hidden = true;
   appView.hidden = true;
@@ -196,17 +258,19 @@ async function bootstrap() {
     }
     showApp();
     await refreshAll();
-    navigate('cameras');
+    applyCurrentRoute();
   } catch (error) {
     showBootError(error.message);
   }
 }
 
-function navigate(view) {
+function navigate(view, { path = '', replace = false, fromHistory = false } = {}) {
   if (!viewMeta[view]) return;
   if (state.currentView === 'monitor' && view !== 'monitor') stopMonitorStreams();
   if (state.currentView === 'recordings' && view !== 'recordings') stopRecordingPlayback();
+  if (view !== 'monitor') monitorPicker.classList.remove('open');
   state.currentView = view;
+  appView.dataset.view = view;
 
   for (const item of $$('.nav-item[data-view]')) item.classList.toggle('active', item.dataset.view === view);
   for (const section of $$('.app-view')) section.hidden = section.id !== `${view}View`;
@@ -215,7 +279,10 @@ function navigate(view) {
   viewEyebrow.textContent = meta.eyebrow;
   viewTitle.textContent = meta.title;
   viewSubtitle.textContent = meta.subtitle;
+  document.title = `${meta.title} · ONVIF Visor`;
   headerActions.hidden = view !== 'cameras';
+
+  if (!fromHistory) setBrowserRoute(path || routePathByView[view], { replace });
 
   if (view === 'cameras') renderCameras();
   if (view === 'monitor') {
@@ -253,7 +320,7 @@ loginForm.addEventListener('submit', async (event) => {
     loginForm.reset();
     showApp();
     await refreshAll();
-    navigate('cameras');
+    applyCurrentRoute();
   } catch (error) {
     loginError.textContent = error.message;
   } finally {
@@ -293,6 +360,40 @@ async function refreshAll() {
   }
 }
 
+function cameraFingerprint(cameras) {
+  return JSON.stringify((cameras || []).map(camera => ({
+    id: camera.id,
+    name: camera.name,
+    manufacturer: camera.manufacturer,
+    model: camera.model,
+    endpoint: camera.endpoint,
+    event_recording: camera.event_recording,
+    schedule_enabled: camera.schedule_enabled,
+    schedule_days: camera.schedule_days,
+    schedule_start: camera.schedule_start,
+    schedule_end: camera.schedule_end,
+  })));
+}
+
+async function refreshCamerasRealtime() {
+  try {
+    const cameras = await api('/api/cameras') || [];
+    if (cameraFingerprint(cameras) === cameraFingerprint(state.cameras)) return;
+
+    const previousSelection = state.monitorSelected.join('|');
+    state.cameras = cameras;
+    state.monitorSelected = state.monitorSelected.filter(id => cameras.some(camera => camera.id === id));
+    const selectionChanged = previousSelection !== state.monitorSelected.join('|');
+
+    if (state.currentView === 'cameras') renderCameras();
+    renderPicker();
+    if (state.currentView === 'monitor' && selectionChanged) renderMonitor();
+    if (state.currentView === 'recordings') renderRecordingCameraList();
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  }
+}
+
 function cameraMatches(camera, query) {
   if (!query) return true;
   const haystack = [camera.name, camera.manufacturer, camera.model, camera.endpoint, camera.profile_name]
@@ -323,18 +424,16 @@ function renderCameras() {
     const fallback = $('.camera-thumb-fallback', card);
     const statusChip = $('.live-chip', card);
     const statusText = $('.camera-status-text', card);
+    const scheduleButton = $('.camera-schedule', card);
     const deleteButton = $('.camera-delete', card);
     const toggle = $('.record-toggle', card);
 
     $('.camera-card-name', card).textContent = camera.name;
-    $('.camera-card-meta', card).textContent = [camera.manufacturer, camera.model, camera.profile_name]
+    $('.camera-card-meta', card).textContent = [camera.manufacturer, camera.model]
       .filter(Boolean).join(' · ') || 'Cámara ONVIF';
-    $('.camera-card-endpoint', card).textContent = camera.endpoint;
-    const eventPill = $('.event-support', card);
-    eventPill.textContent = camera.events_supported ? 'Eventos ONVIF' : 'Sin eventos';
-    eventPill.classList.toggle('good', Boolean(camera.events_supported));
     toggle.checked = Boolean(camera.event_recording);
-    toggle.disabled = !camera.events_supported;
+    scheduleButton.classList.toggle('active', Boolean(camera.schedule_enabled));
+    scheduleButton.title = camera.schedule_enabled ? 'Horario activo · editar' : 'Programar grabación';
 
     image.alt = `Vista previa de ${camera.name}`;
     image.addEventListener('load', () => {
@@ -367,9 +466,11 @@ function renderCameras() {
         toggle.checked = !wanted;
         if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
       } finally {
-        toggle.disabled = !camera.events_supported;
+        toggle.disabled = false;
       }
     });
+
+    scheduleButton.addEventListener('click', () => openScheduleDialog(camera));
 
     deleteButton.addEventListener('click', async () => {
       const accepted = await confirmAction({
@@ -394,18 +495,108 @@ function renderCameras() {
   }
 }
 
+function openScheduleDialog(camera) {
+  $('#scheduleCameraID').value = camera.id;
+  $('#scheduleCameraTitle').textContent = camera.name;
+  $('#scheduleEnabled').checked = Boolean(camera.schedule_enabled);
+  $('#scheduleStart').value = camera.schedule_start || '00:00';
+  $('#scheduleEnd').value = camera.schedule_end || '23:59';
+  $('#scheduleFormError').textContent = '';
+
+  const configuredDays = Array.isArray(camera.schedule_days) && camera.schedule_days.length
+    ? new Set(camera.schedule_days.map(Number))
+    : new Set([0, 1, 2, 3, 4, 5, 6]);
+  for (const input of $$('#scheduleDays input[type="checkbox"]')) {
+    input.checked = configuredDays.has(Number(input.value));
+  }
+  syncScheduleFormState();
+  scheduleDialog.showModal();
+}
+
+function syncScheduleFormState() {
+  const enabled = $('#scheduleEnabled').checked;
+  $('#scheduleStart').disabled = !enabled;
+  $('#scheduleEnd').disabled = !enabled;
+  for (const input of $$('#scheduleDays input[type="checkbox"]')) input.disabled = !enabled;
+}
+
 function openMonitor(cameraID) {
   state.monitorSelected = [cameraID];
-  navigate('monitor');
+  navigate('monitor', { path: `/camara/${encodeURIComponent(cameraID)}` });
 }
 
 function monitorLayoutClass(count) {
   return `layout-${Math.max(1, Math.min(9, count || 1))}`;
 }
 
+function monitorCompositeRatio(count) {
+  if (count === 2) return 32 / 9;
+  if (count === 3 || count === 5 || count === 6) return 8 / 3;
+  return 16 / 9;
+}
+
+function fitMonitorStage() {
+  if (state.currentView !== 'monitor') return;
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    monitorStage.style.width = '100%';
+    monitorStage.style.height = 'auto';
+    return;
+  }
+  const host = monitorStage.parentElement;
+  if (!host) return;
+  const count = Math.max(1, state.monitorSelected.length);
+  const ratio = monitorCompositeRatio(count);
+  const availableWidth = host.clientWidth;
+  const availableHeight = host.clientHeight;
+  let width = availableWidth;
+  let height = width / ratio;
+  if (height > availableHeight) {
+    height = availableHeight;
+    width = height * ratio;
+  }
+  monitorStage.style.width = `${Math.max(1, Math.floor(width))}px`;
+  monitorStage.style.height = `${Math.max(1, Math.floor(height))}px`;
+}
+
+function createMonitorPane(camera, lowBandwidth) {
+  const fragment = $('#monitorPaneTemplate').content.cloneNode(true);
+  const pane = $('.monitor-pane', fragment);
+  const image = $('.monitor-live-image', pane);
+  const loading = $('.monitor-pane-loading', pane);
+  const errorBox = $('.monitor-pane-error', pane);
+  const remove = $('.monitor-remove', pane);
+
+  pane.dataset.cameraId = camera.id;
+  pane.classList.add('entering');
+  $('.monitor-pane-name', pane).textContent = camera.name;
+  image.alt = `Transmisión en vivo de ${camera.name}`;
+  image.addEventListener('load', () => {
+    loading.hidden = true;
+    errorBox.hidden = true;
+    pane.classList.remove('entering');
+  });
+  image.addEventListener('error', async () => {
+    loading.hidden = true;
+    errorBox.hidden = false;
+    try {
+      const session = await getSessionStatus();
+      if (session.required && !session.authenticated) showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
+    } catch (_) {}
+  });
+  remove.addEventListener('click', () => {
+    state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
+    if (window.location.pathname.startsWith('/camara/') && state.monitorSelected.length !== 1) {
+      setBrowserRoute('/multivista', { replace: true });
+    }
+    renderMonitor();
+  });
+
+  const quality = lowBandwidth ? '&quality=low' : '';
+  image.src = `/api/cameras/${encodeURIComponent(camera.id)}/live?t=${Date.now()}${quality}`;
+  return pane;
+}
+
 function renderMonitor() {
-  stopMonitorStreams();
-  monitorStage.replaceChildren();
   const selected = state.monitorSelected
     .map(id => state.cameras.find(camera => camera.id === id))
     .filter(Boolean)
@@ -418,34 +609,29 @@ function renderMonitor() {
   $('#monitorTitle').textContent = selected.length === 1 ? selected[0].name : 'Multivista';
   $('#singleViewBtn').disabled = selected.length <= 1;
 
-  for (const camera of selected) {
-    const fragment = $('#monitorPaneTemplate').content.cloneNode(true);
-    const pane = $('.monitor-pane', fragment);
-    const image = $('.monitor-live-image', pane);
-    const loading = $('.monitor-pane-loading', pane);
-    const errorBox = $('.monitor-pane-error', pane);
-    const remove = $('.monitor-remove', pane);
+  const wanted = new Set(selected.map(camera => camera.id));
+  for (const pane of $$('.monitor-pane', monitorStage)) {
+    if (wanted.has(pane.dataset.cameraId)) continue;
+    $('.monitor-live-image', pane)?.removeAttribute('src');
+    pane.classList.add('leaving');
+    setTimeout(() => pane.remove(), 150);
+  }
 
-    $('.monitor-pane-name', pane).textContent = camera.name;
-    image.alt = `Transmisión en vivo de ${camera.name}`;
-    image.addEventListener('load', () => { loading.hidden = true; errorBox.hidden = true; });
-    image.addEventListener('error', async () => {
-      loading.hidden = true;
-      errorBox.hidden = false;
-      try {
-        const session = await getSessionStatus();
-        if (session.required && !session.authenticated) showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
-      } catch (_) {}
-    });
-    remove.addEventListener('click', () => {
-      state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
-      renderMonitor();
-    });
-    image.src = `/api/cameras/${encodeURIComponent(camera.id)}/live?t=${Date.now()}`;
-    monitorStage.append(fragment);
+  const existing = new Map($$('.monitor-pane', monitorStage).map(pane => [pane.dataset.cameraId, pane]));
+  const lowBandwidth = selected.length > 1;
+  for (const camera of selected) {
+    let pane = existing.get(camera.id);
+    if (!pane) {
+      pane = createMonitorPane(camera, lowBandwidth);
+    } else {
+      const name = $('.monitor-pane-name', pane);
+      if (name) name.textContent = camera.name;
+    }
+    monitorStage.append(pane);
   }
 
   renderPicker();
+  requestAnimationFrame(fitMonitorStage);
 }
 
 function renderPicker() {
@@ -482,6 +668,9 @@ function renderPicker() {
         state.monitorSelected.push(camera.id);
       } else {
         state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
+      }
+      if (window.location.pathname.startsWith('/camara/') && state.monitorSelected.length !== 1) {
+        setBrowserRoute('/multivista', { replace: true });
       }
       renderMonitor();
     });
@@ -553,7 +742,16 @@ async function loadRecordings() {
       return;
     }
     workspace.hidden = false;
-    selectRecordingCamera(state.recordingCameraID, Boolean(state.recordingDate));
+    const pending = state.pendingPlayback;
+    if (pending) {
+      state.recordingCameraID = pending.cameraID;
+      selectRecordingCamera(pending.cameraID, false);
+      const recording = state.recordings.find(item => item.camera_id === pending.cameraID && item.name === pending.recordingName);
+      state.pendingPlayback = null;
+      if (recording) selectRecording(recording, pending.offset);
+    } else {
+      selectRecordingCamera(state.recordingCameraID, Boolean(state.recordingDate));
+    }
     setStatus('Biblioteca de grabaciones actualizada', true);
   } catch (error) {
     loading.hidden = true;
@@ -589,16 +787,17 @@ function renderRecordingCameraList() {
     count.textContent = String(recordings.length);
     details.append(name, meta);
     button.append(details, count);
-    button.addEventListener('click', () => selectRecordingCamera(camera.id, false));
+    button.addEventListener('click', () => selectRecordingCamera(camera.id, false, true));
     list.append(button);
   }
 }
 
-function selectRecordingCamera(cameraID, preserveDate = false) {
+function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = false) {
   if (!cameraID) return;
   stopRecordingPlayback();
   $('#recordingPlayer').hidden = true;
   state.recordingCameraID = cameraID;
+  if (updateRoute) setBrowserRoute(`/grabaciones/${encodeURIComponent(cameraID)}`);
   const camera = state.cameras.find(item => item.id === cameraID);
   const recordings = recordingsForCamera(cameraID);
   if (!preserveDate || !state.recordingDate) {
@@ -716,7 +915,7 @@ function recordingSnapshotURL(recording) {
   return `${recordingBaseURL(recording)}/snapshot`;
 }
 
-function selectRecording(recording) {
+function selectRecording(recording, offset = 0) {
   state.recordingDate = localDateKey(recording.started_at);
   $('#recordingDate').value = state.recordingDate;
   $('#recordingPlayer').hidden = false;
@@ -725,7 +924,7 @@ function selectRecording(recording) {
   $('#recordingDownload').href = `${recordingBaseURL(recording)}/download`;
   $('#recordingScrubber').max = String(Math.max(1, Number(recording.duration_seconds) || 1));
   $('#recordingTotalTime').textContent = formatClock(recording.duration_seconds);
-  startRecordingPlayback(recording, 0);
+  startRecordingPlayback(recording, offset);
   renderRecordingTimeline(recordingsForCamera(recording.camera_id));
   renderRecordingCards(recordingsForCamera(recording.camera_id));
   $('#recordingPlayer').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -833,38 +1032,131 @@ async function refreshEvents(updateStatus = true) {
   }
 }
 
-function renderEvents(events) {
-  const list = $('#eventsList');
-  list.replaceChildren();
-  if (!events.length) {
-    const empty = document.createElement('div');
-    empty.className = 'placeholder-panel';
-    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◉</div><h2>Sin eventos recientes</h2><p>Los eventos ONVIF aparecerán aquí cuando una cámara los reporte.</p>';
-    list.append(empty);
+function eventKey(event) {
+  return [event.camera_id, event.time, event.topic || '', event.data?.State || ''].join('|');
+}
+
+function eventRecordingSnapshotURL(event, attempt = 0) {
+  if (!event.recording_name) return '';
+  const offset = Math.max(0, Number(event.recording_offset) || 0);
+  return `/api/recordings/${encodeURIComponent(event.camera_id)}/${encodeURIComponent(event.recording_name)}/snapshot?at=${offset.toFixed(3)}&r=${attempt}`;
+}
+
+function eventCameraSnapshotURL(event) {
+  return `/api/cameras/${encodeURIComponent(event.camera_id)}/snapshot?v=${encodeURIComponent(event.time || Date.now())}`;
+}
+
+function loadEventThumbnail(image, event) {
+  let attempt = 0;
+  const fallback = () => {
+    image.onerror = null;
+    image.src = eventCameraSnapshotURL(event);
+  };
+  if (!event.recording_name) {
+    fallback();
     return;
   }
-  for (const event of events.slice(0, 100)) {
-    const row = document.createElement('div');
-    row.className = 'event-row';
-    const camera = document.createElement('strong');
-    camera.textContent = event.camera_name;
-    const topic = document.createElement('span');
-    topic.className = 'event-topic mono';
-    topic.textContent = event.topic || 'Evento ONVIF';
-    const right = document.createElement('div');
-    const time = document.createElement('div');
-    time.className = 'event-time';
-    time.textContent = new Date(event.time).toLocaleString();
-    right.append(time);
-    if (event.recording_trigger) {
-      const trigger = document.createElement('div');
-      trigger.className = 'event-trigger';
-      trigger.textContent = '● grabación activada';
-      right.append(trigger);
+  const load = () => {
+    image.src = eventRecordingSnapshotURL(event, attempt);
+  };
+  image.onerror = () => {
+    if (attempt < 3 && image.isConnected) {
+      attempt += 1;
+      setTimeout(load, 1400);
+      return;
     }
-    row.append(camera, topic, right);
-    list.append(row);
+    fallback();
+  };
+  load();
+}
+
+function openEventRecording(event) {
+  if (!event.recording_name) return;
+  state.pendingPlayback = {
+    cameraID: event.camera_id,
+    recordingName: event.recording_name,
+    offset: Math.max(0, Number(event.recording_offset) || 0),
+  };
+  state.recordingCameraID = event.camera_id;
+  navigate('recordings', { path: `/grabaciones/${encodeURIComponent(event.camera_id)}` });
+}
+
+function createEventCard(event) {
+  const card = document.createElement(event.recording_name ? 'button' : 'article');
+  if (card instanceof HTMLButtonElement) card.type = 'button';
+  card.className = 'event-card event-enter';
+  card.dataset.eventKey = eventKey(event);
+  if (event.recording_name) {
+    card.classList.add('clickable');
+    card.addEventListener('click', () => openEventRecording(event));
   }
+
+  const thumb = document.createElement('div');
+  thumb.className = 'event-thumb';
+  const image = document.createElement('img');
+  image.alt = `Evento de ${event.camera_name}`;
+  image.loading = 'lazy';
+  thumb.append(image);
+  loadEventThumbnail(image, event);
+
+  const body = document.createElement('div');
+  body.className = 'event-body';
+  const camera = document.createElement('strong');
+  camera.textContent = event.camera_name;
+  const topic = document.createElement('span');
+  topic.className = 'event-topic';
+  topic.textContent = (event.topic || 'Evento').split('/').pop() || 'Evento';
+  const details = document.createElement('span');
+  details.className = 'event-detail';
+  const score = event.data?.Score ? ` · nivel ${Math.round(Number(event.data.Score) * 100)}%` : '';
+  details.textContent = `${new Date(event.time).toLocaleString()}${score}`;
+  body.append(camera, topic, details);
+
+  const side = document.createElement('div');
+  side.className = 'event-side';
+  if (event.recording_name) {
+    const action = document.createElement('span');
+    action.className = 'event-jump';
+    action.textContent = `▶ ${formatClock(event.recording_offset || 0)}`;
+    side.append(action);
+  }
+  if (event.recording_trigger) {
+    const trigger = document.createElement('span');
+    trigger.className = 'event-trigger';
+    trigger.textContent = 'GRABADO';
+    side.append(trigger);
+  }
+
+  card.append(thumb, body, side);
+  requestAnimationFrame(() => card.classList.remove('event-enter'));
+  return card;
+}
+
+function renderEvents(events) {
+  const list = $('#eventsList');
+  const visible = (events || []).slice(0, 100);
+  if (!visible.length) {
+    if (!$('.placeholder-panel', list)) {
+      list.replaceChildren();
+      const empty = document.createElement('div');
+      empty.className = 'placeholder-panel';
+      empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◉</div><h2>Sin eventos recientes</h2><p>El visor mostrará aquí el movimiento detectado por ONVIF o por el detector de respaldo.</p>';
+      list.append(empty);
+    }
+    return;
+  }
+
+  $('.placeholder-panel', list)?.remove();
+  const existing = new Map($$('.event-card', list).map(card => [card.dataset.eventKey, card]));
+  const ordered = visible.map(event => existing.get(eventKey(event)) || createEventCard(event));
+  const wanted = new Set(ordered);
+  for (const card of $$('.event-card', list)) {
+    if (!wanted.has(card)) card.remove();
+  }
+  ordered.forEach((card, index) => {
+    const current = list.children[index];
+    if (current !== card) list.insertBefore(card, current || null);
+  });
 }
 
 async function discover() {
@@ -929,6 +1221,47 @@ function confirmAction({ title, message, confirmLabel = 'Confirmar' }) {
   });
 }
 
+$('#scheduleEnabled').addEventListener('change', syncScheduleFormState);
+
+$('#scheduleForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const cameraID = $('#scheduleCameraID').value;
+  const enabled = $('#scheduleEnabled').checked;
+  const days = $$('#scheduleDays input[type="checkbox"]:checked').map(input => Number(input.value));
+  const start = $('#scheduleStart').value;
+  const end = $('#scheduleEnd').value;
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+  const errorBox = $('#scheduleFormError');
+  const saveButton = $('#saveScheduleBtn');
+  errorBox.textContent = '';
+
+  if (enabled && !days.length) {
+    errorBox.textContent = 'Selecciona al menos un día.';
+    return;
+  }
+  if (enabled && (!start || !end)) {
+    errorBox.textContent = 'Selecciona la hora de inicio y la hora final.';
+    return;
+  }
+
+  saveButton.disabled = true;
+  try {
+    const updated = await api(`/api/cameras/${encodeURIComponent(cameraID)}/schedule`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, days, start, end, timezone }),
+    });
+    const camera = state.cameras.find(item => item.id === cameraID);
+    if (camera && updated) Object.assign(camera, updated);
+    scheduleDialog.close();
+    renderCameras();
+    setStatus(enabled ? 'Horario de grabación activado' : 'Horario de grabación desactivado', true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
+  } finally {
+    saveButton.disabled = false;
+  }
+});
+
 $('#cameraForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const errorBox = $('#cameraFormError');
@@ -957,6 +1290,7 @@ $('#cameraForm').addEventListener('submit', async (event) => {
 });
 
 for (const item of $$('.nav-item[data-view]')) item.addEventListener('click', () => navigate(item.dataset.view));
+$('.sidebar-brand').addEventListener('click', () => navigate('cameras'));
 $('#addBtn').addEventListener('click', () => cameraDialog.showModal());
 $('#emptyAddBtn').addEventListener('click', () => cameraDialog.showModal());
 $('#discoverBtn').addEventListener('click', discover);
@@ -964,10 +1298,9 @@ $('#emptyDiscoverBtn').addEventListener('click', discover);
 $('#eventsRefreshBtn').addEventListener('click', () => refreshEvents(true));
 $('#backToCamerasBtn').addEventListener('click', () => navigate('cameras'));
 $('#singleViewBtn').addEventListener('click', () => {
-  if (state.monitorSelected.length > 1) {
-    state.monitorSelected = [state.monitorSelected[0]];
-    renderMonitor();
-  }
+  if (state.monitorSelected.length > 1) state.monitorSelected = [state.monitorSelected[0]];
+  const cameraID = state.monitorSelected[0];
+  if (cameraID) navigate('monitor', { path: `/camara/${encodeURIComponent(cameraID)}`, replace: true });
 });
 $('#togglePickerBtn').addEventListener('click', () => monitorPicker.classList.toggle('open'));
 $('#closePickerBtn').addEventListener('click', () => monitorPicker.classList.remove('open'));
@@ -1013,6 +1346,14 @@ for (const button of $$('[data-close]')) {
     if (dialog?.open) dialog.close('cancel');
   });
 }
+
+window.addEventListener('popstate', () => {
+  if (!appView.hidden) applyCurrentRoute();
+});
+
+window.addEventListener('resize', () => {
+  if (!appView.hidden && state.currentView === 'monitor') fitMonitorStage();
+});
 
 window.addEventListener('beforeunload', () => {
   stopMonitorStreams();

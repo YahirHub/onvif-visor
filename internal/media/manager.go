@@ -19,6 +19,7 @@ type Manager struct {
 	liveViewers     map[string]int
 	playbackViewers int
 	recorders       map[string]*recording
+	compressionSem  chan struct{}
 }
 
 type RecordingStatus struct {
@@ -30,12 +31,14 @@ type RecordingStatus struct {
 }
 
 type recording struct {
-	cameraID  string
-	path      string
-	startedAt time.Time
-	stopAfter time.Time
-	cmd       *exec.Cmd
-	done      chan error
+	cameraID     string
+	path         string
+	startedAt    time.Time
+	stopAfter    time.Time
+	cmd          *exec.Cmd
+	done         chan error
+	closed       chan struct{}
+	finalizeOnce sync.Once
 }
 
 func New(ffmpegPath, recordingsDir string) (*Manager, error) {
@@ -50,10 +53,11 @@ func New(ffmpegPath, recordingsDir string) (*Manager, error) {
 		return nil, errors.New("recordings directory is required")
 	}
 	return &Manager{
-		ffmpeg:        resolved,
-		recordingsDir: filepath.Clean(recordingsDir),
-		liveViewers:   make(map[string]int),
-		recorders:     make(map[string]*recording),
+		ffmpeg:         resolved,
+		recordingsDir:  filepath.Clean(recordingsDir),
+		liveViewers:    make(map[string]int),
+		recorders:      make(map[string]*recording),
+		compressionSem: make(chan struct{}, 1),
 	}, nil
 }
 

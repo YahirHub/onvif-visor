@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -53,13 +54,15 @@ type App struct {
 }
 
 type CameraEvent struct {
-	CameraID   string            `json:"camera_id"`
-	CameraName string            `json:"camera_name"`
-	Topic      string            `json:"topic"`
-	Time       time.Time         `json:"time"`
-	Source     map[string]string `json:"source,omitempty"`
-	Data       map[string]string `json:"data,omitempty"`
-	Triggered  bool              `json:"recording_trigger"`
+	CameraID        string            `json:"camera_id"`
+	CameraName      string            `json:"camera_name"`
+	Topic           string            `json:"topic"`
+	Time            time.Time         `json:"time"`
+	Source          map[string]string `json:"source,omitempty"`
+	Data            map[string]string `json:"data,omitempty"`
+	Triggered       bool              `json:"recording_trigger"`
+	RecordingName   string            `json:"recording_name,omitempty"`
+	RecordingOffset float64           `json:"recording_offset,omitempty"`
 }
 
 func New(cfg Config) (*App, error) {
@@ -88,6 +91,7 @@ func New(cfg Config) (*App, error) {
 	}
 	app.routes()
 	app.startExistingWatchers()
+	app.startScheduler()
 	return app, nil
 }
 
@@ -116,6 +120,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/cameras", a.handleAddCamera)
 	a.mux.HandleFunc("DELETE /api/cameras/{id}", a.handleDeleteCamera)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/recording", a.handleRecordingSettings)
+	a.mux.HandleFunc("PUT /api/cameras/{id}/schedule", a.handleScheduleSettings)
 	a.mux.HandleFunc("GET /api/cameras/{id}/live", a.handleLive)
 	a.mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.handleSnapshot)
 	a.mux.HandleFunc("GET /api/events", a.handleEvents)
@@ -123,7 +128,26 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/snapshot", a.handleRecordingSnapshot)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/play", a.handleRecordingPlayback)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/download", a.handleRecordingDownload)
+	a.mux.HandleFunc("GET /{$}", a.handleApp)
+	a.mux.HandleFunc("GET /camaras", a.handleApp)
+	a.mux.HandleFunc("GET /camara/{id}", a.handleApp)
+	a.mux.HandleFunc("GET /multivista", a.handleApp)
+	a.mux.HandleFunc("GET /grabaciones", a.handleApp)
+	a.mux.HandleFunc("GET /grabaciones/{cameraID}", a.handleApp)
+	a.mux.HandleFunc("GET /eventos", a.handleApp)
 	a.mux.Handle("GET /", http.FileServer(http.FS(a.assets)))
+}
+
+func (a *App) handleApp(w http.ResponseWriter, _ *http.Request) {
+	data, err := fs.ReadFile(a.assets, "index.html")
+	if err != nil {
+		http.Error(w, "interfaz no disponible", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -232,10 +256,17 @@ func (a *App) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func (a *App) addEvent(cam store.Camera, event onvifsvc.Event) {
+func (a *App) addEvent(cam store.Camera, event onvifsvc.Event, status media.RecordingStatus, triggered bool) {
 	item := CameraEvent{
 		CameraID: cam.ID, CameraName: cam.Name, Topic: event.Topic, Time: event.Time,
-		Source: event.Source, Data: event.Data, Triggered: event.Recording,
+		Source: event.Source, Data: event.Data, Triggered: triggered,
+	}
+	if status.Path != "" && !status.StartedAt.IsZero() {
+		item.RecordingName = filepath.Base(status.Path)
+		item.RecordingOffset = event.Time.Sub(status.StartedAt).Seconds()
+		if item.RecordingOffset < 0 {
+			item.RecordingOffset = 0
+		}
 	}
 	a.eventsMu.Lock()
 	a.events = append([]CameraEvent{item}, a.events...)

@@ -32,16 +32,15 @@ func WatchEvents(ctx context.Context, creds Credentials, callback func(Event)) e
 		sub, subErr := client.CreatePullPointSubscription(subCtx, "", &duration, "")
 		subCancel()
 		if subErr != nil {
-			if !sleepContext(ctx, 3*time.Second) {
-				break
-			}
-			continue
+			return fmt.Errorf("create pull-point subscription: %w", subErr)
 		}
 
 		cycleDeadline := time.Now().Add(4 * time.Minute)
+		var pullErr error
 		for ctx.Err() == nil && time.Now().Before(cycleDeadline) {
-			messages, pullErr := client.PullMessages(ctx, sub.SubscriptionReference, 5*time.Second, 64)
-			if pullErr != nil {
+			messages, err := client.PullMessages(ctx, sub.SubscriptionReference, 5*time.Second, 64)
+			if err != nil {
+				pullErr = err
 				break
 			}
 			for _, msg := range messages {
@@ -55,15 +54,20 @@ func WatchEvents(ctx context.Context, creds Credentials, callback func(Event)) e
 					event.Time = time.Now().UTC()
 				}
 				event.Recording = IsRecordingEvent(event)
-				callback(event)
+				if callback != nil {
+					callback(event)
+				}
 			}
 		}
 
 		unsubCtx, unsubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = client.Unsubscribe(unsubCtx, sub.SubscriptionReference)
 		unsubCancel()
-		if ctx.Err() == nil {
-			_ = sleepContext(ctx, time.Second)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if pullErr != nil {
+			return fmt.Errorf("pull event messages: %w", pullErr)
 		}
 	}
 	return ctx.Err()

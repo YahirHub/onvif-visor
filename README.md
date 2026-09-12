@@ -13,16 +13,19 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Interfaz web profesional embebida dentro del binario Go.
 - Login propio del frontend con sesión `HttpOnly` cuando el visor se publica en LAN.
 - Galería inicial tipo thumbnails: cada cámara obtiene un snapshot JPEG bajo demanda en vez de abrir un stream continuo.
-- Click en una miniatura para abrir la transmisión RTSP -> MJPEG en tiempo real.
+- Click en una miniatura para abrir la transmisión RTSP -> MJPEG en tiempo real con cola de un solo frame: si el cliente se atrasa se descartan cuadros viejos en vez de acumular delay.
 - Multivista adaptable de hasta 9 cámaras: 2 mitad/mitad, 3 con vista principal + dos secundarias, 4 en 2x2, 5-6 en 3x2 y 7-9 en 3x3.
-- Selector de cámaras dentro de la multivista para agregar o quitar streams mientras se monitorea.
-- Suscripción ONVIF PullPoint para recibir eventos.
-- Grabación automática ante eventos de movimiento, tamper, entrada digital o alarma.
+- Selector de cámaras dentro de la multivista para agregar o quitar streams sin reiniciar los que ya están reproduciéndose; las nuevas vistas múltiples usan un perfil más ligero.
+- Suscripción ONVIF PullPoint para recibir eventos cuando el firmware la implementa correctamente.
+- Detector local de movimiento por FFmpeg como respaldo cuando PullPoint falla o no está disponible.
+- Grabación automática ante movimiento/eventos y grabación programada por días y horario.
 - Post-roll configurable de 1 a 600 segundos.
 - Grabación con `-c copy` a MKV para evitar recodificación siempre que el stream sea compatible.
 - Biblioteca de grabaciones por cámara con cantidad, espacio usado y duración aproximada.
-- Miniaturas JPEG de grabaciones.
+- Miniaturas JPEG de grabaciones y miniaturas de eventos; un evento asociado a un clip puede abrir la reproducción directamente en su segundo exacto.
 - Línea de tiempo de 24 horas filtrable por fecha.
+- Escritura Matroska con clusters cortos, flush frecuente y sincronización periódica a disco para reducir el daño ante una interrupción brusca.
+- Compresión H.264 en segundo plano al cerrar un clip; el original sólo se reemplaza atómicamente cuando el resultado es válido y realmente ahorra espacio.
 - Reproducción web de clips mediante FFmpeg -> MJPEG, con pausa/reanudación y seek por segundos.
 - Descarga autenticada del MKV original.
 - Servicio ligado a `127.0.0.1` por defecto.
@@ -48,7 +51,7 @@ El binario de la aplicación se compila con `CGO_ENABLED=0`, por lo que es está
 - Go 1.24 o superior para compilar. El proyecto fue validado con Go 1.27.1.
 - FFmpeg accesible en `PATH` o indicado con `-ffmpeg`.
 - Cámara ONVIF accesible desde la misma red del host.
-- Para grabación por eventos, la cámara debe exponer ONVIF Events/PullPoint y tener habilitado en su firmware el evento que se desea reportar.
+- Para eventos nativos se usa ONVIF Events/PullPoint; si la cámara lo anuncia pero falla, el visor puede usar un detector local de movimiento sobre RTSP como respaldo.
 
 ## Compilar
 
@@ -112,10 +115,11 @@ Para una red no confiable se recomienda colocar TLS delante del servicio. El mod
 3. Pulsar una cámara para abrirla en **Vista en vivo**.
 4. Usar **Agregar cámaras** dentro del monitor para activar multivista. El layout se reorganiza automáticamente hasta un máximo de 9 streams.
 5. Usar **Detectar cámaras** o **Agregar cámara** para incorporar nuevos endpoints ONVIF.
-6. Si una cámara soporta Events, activar **Grabar eventos** desde su tarjeta.
-7. Abrir **Grabaciones** para elegir una cámara, revisar sus clips, filtrar la fecha y usar la línea de tiempo.
-8. Pulsar una tarjeta o bloque de timeline para reproducir. El scrubber reinicia la reproducción desde el segundo seleccionado y el MKV original puede descargarse.
-9. Abrir **Eventos** para consultar la actividad ONVIF reciente y saber cuáles dispararon grabación.
+6. Activar **REC** en una tarjeta para grabar cuando haya movimiento/eventos.
+7. Usar el botón **◷** de la tarjeta para activar un horario, elegir días de la semana y definir hora inicial/final; los horarios que cruzan medianoche están soportados.
+8. Abrir **Grabaciones** para elegir una cámara, revisar sus clips, filtrar la fecha y usar la línea de tiempo.
+9. Pulsar una tarjeta o bloque de timeline para reproducir. El scrubber reinicia la reproducción desde el segundo seleccionado y el MKV original puede descargarse.
+10. Abrir **Eventos** para consultar movimiento y eventos recientes y saber cuáles dispararon grabación.
 
 ## Endpoint manual
 
@@ -149,7 +153,7 @@ Las grabaciones se almacenan en `recordings/<camera-id>/` y solo se indexan arch
 
 La hora de inicio se obtiene del nombre que genera el grabador (`YYYYMMDD-HHMMSS.mmm.mkv`). Para mantener una sola dependencia externa, la duración mostrada se aproxima usando el timestamp de inicio y la última modificación del archivo; no se requiere `ffprobe` adicional.
 
-El playback del navegador convierte el MKV a MJPEG a velocidad real. Permite seek por segundos, pausa/reanudación y hasta 4 reproducciones simultáneas. El playback web actual no incluye audio; la descarga conserva el MKV original.
+El playback del navegador convierte el MKV almacenado a MJPEG a velocidad real. Permite seek por segundos, pausa/reanudación y hasta 4 reproducciones simultáneas. El playback web actual no incluye audio; la descarga entrega el MKV que quedó almacenado después de la optimización de espacio.
 
 ## Eventos que disparan grabación
 
@@ -179,11 +183,11 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 ## Limitaciones conocidas
 
 - MJPEG prioriza simplicidad y compatibilidad del navegador. Consume más ancho de banda/CPU que WebRTC/HLS.
-- El live está limitado a 10 fps y 960 px de ancho por stream.
+- La vista individual usa hasta 8 fps y 960 px; las nuevas cámaras añadidas a una multivista usan hasta 5 fps y 640 px para reducir CPU, red y latencia.
 - Se permiten hasta 4 espectadores live simultáneos por cámara y hasta 4 playbacks de grabaciones simultáneos.
 - Una multivista de 9 cámaras implica 9 procesos FFmpeg live; la capacidad real depende de CPU, red y resolución de origen.
 - El descubrimiento depende de multicast UDP/3702; VLAN, firewalls o routers que bloqueen WS-Discovery pueden impedir encontrar una cámara aunque el alta manual siga funcionando.
-- Algunos fabricantes anuncian ONVIF Events pero implementan PullPoint de forma incompleta. El visor reintenta la suscripción; la disponibilidad real depende del firmware.
+- Algunos fabricantes anuncian ONVIF Events pero implementan PullPoint de forma incompleta. En ese caso el visor cambia automáticamente al detector local de movimiento por FFmpeg; esto añade un proceso ligero adicional por cámara afectada.
 - La grabación usa Matroska (`.mkv`) y copia los codecs del origen. Si una cámara entrega un formato que FFmpeg no puede remuxear a MKV, la grabación fallará y requerirá una política específica.
 - Un clip todavía activo puede no ser reproducible hasta que FFmpeg cierre correctamente el contenedor MKV.
 - Si se elimina una cámara, sus grabaciones permanecen físicamente en disco pero dejan de aparecer en la biblioteca mientras esa cámara no esté configurada.

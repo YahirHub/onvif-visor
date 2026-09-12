@@ -66,3 +66,33 @@ func TestListNeverReturnsPassword(t *testing.T) {
 		t.Fatal("List() exposed camera password")
 	}
 }
+
+func TestSchedulePersists(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam, err := first.Add(Camera{Name: "Horario"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = first.SetSchedule(cam.ID, true, []int{1, 2, 3, 4, 5}, "08:30", "18:15", "America/Mexico_City")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := second.Get(cam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ScheduleEnabled || loaded.ScheduleStart != "08:30" || loaded.ScheduleEnd != "18:15" || loaded.ScheduleTimezone != "America/Mexico_City" {
+		t.Fatalf("unexpected schedule: %#v", loaded)
+	}
+	if len(loaded.ScheduleDays) != 5 || loaded.ScheduleDays[0] != 1 || loaded.ScheduleDays[4] != 5 {
+		t.Fatalf("schedule days = %#v", loaded.ScheduleDays)
+	}
+}

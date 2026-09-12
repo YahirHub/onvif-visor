@@ -117,17 +117,20 @@ func (m *Manager) RecordingPath(cameraID, name string) (string, error) {
 	return path, nil
 }
 
-func (m *Manager) RecordingSnapshot(ctx context.Context, cameraID, name string) ([]byte, error) {
+func (m *Manager) RecordingSnapshot(ctx context.Context, cameraID, name string, offsetSeconds float64) ([]byte, error) {
 	path, err := m.RecordingPath(cameraID, name)
 	if err != nil {
 		return nil, err
+	}
+	if offsetSeconds < 0 {
+		offsetSeconds = 0
 	}
 	ctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, m.ffmpeg,
 		"-hide_banner", "-loglevel", "error",
-		"-ss", "0.5",
+		"-ss", strconv.FormatFloat(offsetSeconds, 'f', 3, 64),
 		"-i", path,
 		"-an", "-frames:v", "1",
 		"-vf", "scale=640:-2:force_original_aspect_ratio=decrease",

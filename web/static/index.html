@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0b0f14">
+  <meta name="theme-color" content="#080b0f">
   <title>ONVIF Visor</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -37,34 +37,31 @@
     </form>
   </section>
 
-  <div id="appView" class="app-shell" hidden>
+  <div id="appView" class="app-shell" hidden data-view="cameras">
     <aside class="sidebar" aria-label="Navegación principal">
-      <div class="sidebar-brand">
-        <div class="brand-mark small" aria-hidden="true">OV</div>
-        <div>
-          <strong>ONVIF Visor</strong>
-          <span>Centro de monitoreo</span>
-        </div>
-      </div>
+      <button class="sidebar-brand" type="button" data-view="cameras" aria-label="Ir a cámaras">
+        <span class="brand-mark small" aria-hidden="true">OV</span>
+        <span class="brand-copy"><strong>ONVIF Visor</strong><small>Monitor</small></span>
+      </button>
 
       <nav class="nav-list">
-        <button class="nav-item active" type="button" data-view="cameras">
+        <button class="nav-item active" type="button" data-view="cameras" title="Cámaras">
           <span class="nav-icon" aria-hidden="true">▣</span><span>Cámaras</span>
         </button>
-        <button class="nav-item" type="button" data-view="monitor">
+        <button class="nav-item" type="button" data-view="monitor" title="Multivista">
           <span class="nav-icon" aria-hidden="true">▦</span><span>Multivista</span>
         </button>
-        <button class="nav-item" type="button" data-view="recordings">
+        <button class="nav-item" type="button" data-view="recordings" title="Grabaciones">
           <span class="nav-icon" aria-hidden="true">◫</span><span>Grabaciones</span>
         </button>
-        <button class="nav-item" type="button" data-view="events">
+        <button class="nav-item" type="button" data-view="events" title="Eventos">
           <span class="nav-icon" aria-hidden="true">◉</span><span>Eventos</span>
         </button>
       </nav>
 
       <div class="sidebar-foot">
-        <div class="sidebar-health"><span id="sidebarDot" class="dot"></span><span id="sidebarStatus">Conectando…</span></div>
-        <button id="logoutBtn" class="nav-item" type="button" hidden>
+        <div class="sidebar-health" title="Estado del servicio"><span id="sidebarDot" class="dot"></span><span id="sidebarStatus">Conectando…</span></div>
+        <button id="logoutBtn" class="nav-item logout-item" type="button" hidden title="Cerrar sesión">
           <span class="nav-icon" aria-hidden="true">↪</span><span>Cerrar sesión</span>
         </button>
       </div>
@@ -72,15 +69,15 @@
 
     <div class="workspace">
       <header class="workspace-header">
-        <div>
+        <div class="workspace-route">
           <p class="eyebrow" id="viewEyebrow">MONITOREO</p>
           <h1 id="viewTitle">Cámaras</h1>
-          <p id="viewSubtitle" class="subtitle">Selecciona una cámara para abrir su transmisión en tiempo real.</p>
+          <p id="viewSubtitle" class="subtitle">Selecciona una cámara para abrirla.</p>
         </div>
         <div class="workspace-header-actions">
           <div id="headerActions" class="header-actions">
-            <button id="discoverBtn" class="button secondary" type="button">Detectar cámaras</button>
-            <button id="addBtn" class="button primary" type="button">Agregar cámara</button>
+            <button id="discoverBtn" class="button secondary" type="button">Detectar</button>
+            <button id="addBtn" class="button primary" type="button">+ Cámara</button>
           </div>
           <button id="logoutMobileBtn" class="icon-button mobile-logout" type="button" aria-label="Cerrar sesión" title="Cerrar sesión" hidden>↪</button>
         </div>
@@ -91,18 +88,18 @@
           <div class="toolbar-card">
             <div class="search-box">
               <span aria-hidden="true">⌕</span>
-              <input id="cameraSearch" type="search" placeholder="Buscar cámara por nombre, modelo o endpoint…" autocomplete="off">
+              <input id="cameraSearch" type="search" placeholder="Buscar cámara…" autocomplete="off">
             </div>
             <div class="toolbar-meta"><strong id="cameraCount">0</strong><span>cámaras</span></div>
-            <button id="refreshSnapshotsBtn" class="button ghost" type="button">Actualizar miniaturas</button>
+            <button id="refreshSnapshotsBtn" class="button ghost compact-button" type="button" title="Actualizar miniaturas">↻</button>
           </div>
           <div id="cameraGrid" class="camera-thumbnail-grid"></div>
           <div id="emptyState" class="empty-state">
             <div class="empty-icon" aria-hidden="true">▣</div>
-            <h2>No hay cámaras agregadas</h2>
-            <p>Detecta dispositivos ONVIF en la red o agrega un endpoint manualmente.</p>
+            <h2>No hay cámaras</h2>
+            <p>Detecta dispositivos ONVIF o agrega un endpoint manualmente.</p>
             <div class="empty-actions">
-              <button id="emptyDiscoverBtn" class="button secondary" type="button">Detectar cámaras</button>
+              <button id="emptyDiscoverBtn" class="button secondary" type="button">Detectar</button>
               <button id="emptyAddBtn" class="button primary" type="button">Agregar cámara</button>
             </div>
           </div>
@@ -111,13 +108,12 @@
         <section id="monitorView" class="app-view" hidden>
           <div class="monitor-toolbar">
             <div class="monitor-toolbar-left">
-              <button id="backToCamerasBtn" class="button ghost" type="button">← Cámaras</button>
-              <span class="divider"></span>
-              <div><strong id="monitorTitle">Vista en vivo</strong><span id="monitorMeta">0 cámaras activas</span></div>
+              <button id="backToCamerasBtn" class="icon-button monitor-back" type="button" aria-label="Volver a cámaras" title="Cámaras">←</button>
+              <div><strong id="monitorTitle">Vista en vivo</strong><span id="monitorMeta">0 cámaras</span></div>
             </div>
             <div class="monitor-toolbar-actions">
-              <button id="singleViewBtn" class="button ghost" type="button">Vista individual</button>
-              <button id="togglePickerBtn" class="button primary" type="button">Agregar cámaras</button>
+              <button id="singleViewBtn" class="button ghost" type="button">1 cámara</button>
+              <button id="togglePickerBtn" class="button secondary" type="button">Cámaras</button>
             </div>
           </div>
 
@@ -125,20 +121,20 @@
             <div class="monitor-main">
               <div id="monitorStage" class="monitor-stage layout-1" aria-live="polite"></div>
               <div id="monitorEmpty" class="monitor-empty" hidden>
-                <h2>Selecciona cámaras para comenzar</h2>
-                <p>Puedes mostrar hasta 9 transmisiones simultáneas. El diseño se adapta automáticamente.</p>
+                <h2>Sin cámaras en la vista</h2>
+                <p>Selecciona hasta 9 cámaras.</p>
                 <button id="monitorEmptyAddBtn" class="button primary" type="button">Elegir cámaras</button>
               </div>
             </div>
 
             <aside id="monitorPicker" class="monitor-picker" aria-label="Seleccionar cámaras">
               <div class="picker-head">
-                <div><strong>Cámaras</strong><span id="pickerCount">0 / 9 seleccionadas</span></div>
+                <div><strong>Cámaras</strong><span id="pickerCount">0 / 9</span></div>
                 <button id="closePickerBtn" class="icon-button" type="button" aria-label="Cerrar selector">×</button>
               </div>
               <div class="search-box compact">
                 <span aria-hidden="true">⌕</span>
-                <input id="pickerSearch" type="search" placeholder="Buscar cámara…" autocomplete="off">
+                <input id="pickerSearch" type="search" placeholder="Buscar…" autocomplete="off">
               </div>
               <div id="pickerList" class="picker-list"></div>
             </aside>
@@ -148,36 +144,25 @@
         <section id="recordingsView" class="app-view" hidden>
           <div class="recordings-shell">
             <aside class="recordings-cameras">
-              <div class="recordings-cameras-head">
-                <strong>Almacenamiento</strong>
-                <span>Por cámara</span>
-              </div>
+              <div class="recordings-cameras-head"><strong>Cámaras</strong><span>Grabaciones</span></div>
               <div id="recordingCameraList" class="recording-camera-list"></div>
             </aside>
 
             <div class="recordings-content">
               <div id="recordingsLoading" class="placeholder-panel">
-                <span class="spinner"></span>
-                <h2>Cargando grabaciones</h2>
-                <p>Consultando el almacenamiento local…</p>
+                <span class="spinner"></span><h2>Cargando</h2><p>Consultando grabaciones…</p>
               </div>
-
               <div id="recordingsEmpty" class="placeholder-panel" hidden>
-                <div class="empty-icon" aria-hidden="true">◫</div>
-                <h2>No hay grabaciones almacenadas</h2>
-                <p>Activa la grabación por eventos en una cámara para que los clips aparezcan aquí.</p>
+                <div class="empty-icon" aria-hidden="true">◫</div><h2>Sin grabaciones</h2><p>Los clips aparecerán cuando una cámara genere eventos.</p>
               </div>
 
               <div id="recordingsWorkspace" hidden>
                 <div class="recording-summary-bar">
-                  <div>
-                    <p class="eyebrow">CÁMARA</p>
-                    <h2 id="recordingCameraTitle">Grabaciones</h2>
-                  </div>
+                  <div><h2 id="recordingCameraTitle">Grabaciones</h2></div>
                   <div class="recording-stats">
                     <div><strong id="recordingCount">0</strong><span>clips</span></div>
-                    <div><strong id="recordingSize">0 MB</strong><span>almacenados</span></div>
-                    <div><strong id="recordingDuration">0 min</strong><span>grabados</span></div>
+                    <div><strong id="recordingSize">0 MB</strong><span>espacio</span></div>
+                    <div><strong id="recordingDuration">0 min</strong><span>vídeo</span></div>
                   </div>
                 </div>
 
@@ -185,14 +170,14 @@
                   <div class="recording-player-head">
                     <div><strong id="recordingPlayerTitle">Reproducción</strong><span id="recordingPlayerDate"></span></div>
                     <div class="recording-player-actions">
-                      <a id="recordingDownload" class="button ghost" href="#" download>Descargar MKV</a>
+                      <a id="recordingDownload" class="button ghost" href="#" download>Descargar</a>
                       <button id="recordingClosePlayer" class="icon-button" type="button" aria-label="Cerrar reproducción">×</button>
                     </div>
                   </div>
                   <div class="recording-video-frame">
                     <img id="recordingPlaybackImage" alt="Reproducción de grabación">
-                    <div id="recordingPlaybackLoading" class="monitor-pane-loading"><span class="spinner"></span><span>Preparando reproducción…</span></div>
-                    <div id="recordingPlaybackError" class="monitor-pane-error" hidden><strong>No se pudo reproducir</strong><span>Verifica que FFmpeg pueda leer este archivo.</span></div>
+                    <div id="recordingPlaybackLoading" class="monitor-pane-loading"><span class="spinner"></span><span>Preparando…</span></div>
+                    <div id="recordingPlaybackError" class="monitor-pane-error" hidden><strong>No se pudo reproducir</strong><span>Verifica el archivo.</span></div>
                   </div>
                   <div class="playback-controls">
                     <button id="recordingPlayPause" class="button secondary" type="button">Pausar</button>
@@ -204,19 +189,17 @@
 
                 <section class="timeline-panel">
                   <div class="timeline-head">
-                    <div><h3>Línea de tiempo</h3><p>Haz clic en un bloque para reproducir ese clip.</p></div>
-                    <label class="date-filter">Fecha<input id="recordingDate" type="date"></label>
+                    <div><h3>Línea de tiempo</h3><p>Selecciona un bloque para reproducirlo.</p></div>
+                    <label class="date-filter"><span>Fecha</span><input id="recordingDate" type="date"></label>
                   </div>
-                  <div class="timeline-ruler" aria-hidden="true">
-                    <span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>24:00</span>
-                  </div>
+                  <div class="timeline-ruler" aria-hidden="true"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>
                   <div id="recordingTimeline" class="recording-timeline"></div>
                   <p id="timelineEmpty" class="timeline-empty" hidden>No hay clips en esta fecha.</p>
                 </section>
 
                 <div class="section-toolbar recording-list-head">
-                  <div><h2>Clips almacenados</h2><p id="recordingListMeta">0 resultados</p></div>
-                  <button id="recordingsRefreshBtn" class="button ghost" type="button">Actualizar</button>
+                  <div><h2>Clips</h2><p id="recordingListMeta">0 grabaciones</p></div>
+                  <button id="recordingsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
                 </div>
                 <div id="recordingList" class="recording-grid"></div>
               </div>
@@ -226,8 +209,8 @@
 
         <section id="eventsView" class="app-view" hidden>
           <div class="section-toolbar">
-            <div><h2>Actividad reciente</h2><p>Eventos ONVIF recibidos por las cámaras.</p></div>
-            <button id="eventsRefreshBtn" class="button ghost" type="button">Actualizar</button>
+            <div><h2>Actividad</h2><p>Movimiento y eventos recientes.</p></div>
+            <button id="eventsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
           </div>
           <div id="eventsList" class="events-list"></div>
         </section>
@@ -237,38 +220,54 @@
 
   <dialog id="cameraDialog">
     <form id="cameraForm" method="dialog">
-      <div class="dialog-head">
-        <div><p class="eyebrow">NUEVA CÁMARA</p><h2>Agregar ONVIF</h2></div>
-        <button type="button" class="icon-button" data-close="cameraDialog" aria-label="Cerrar">×</button>
-      </div>
-      <label class="field">Nombre
-        <input id="cameraName" name="name" autocomplete="off" placeholder="Entrada principal">
-      </label>
-      <label class="field">Endpoint ONVIF
-        <input id="cameraEndpoint" name="endpoint" required autocomplete="url" placeholder="http://192.168.1.50/onvif/device_service">
-      </label>
+      <div class="dialog-head"><div><p class="eyebrow">NUEVA CÁMARA</p><h2>Agregar ONVIF</h2></div><button type="button" class="icon-button" data-close="cameraDialog" aria-label="Cerrar">×</button></div>
+      <label class="field">Nombre<input id="cameraName" name="name" autocomplete="off" placeholder="Entrada principal"></label>
+      <label class="field">Endpoint ONVIF<input id="cameraEndpoint" name="endpoint" required autocomplete="url" placeholder="http://192.168.1.50/onvif/device_service"></label>
       <div class="form-row">
-        <label class="field">Usuario
-          <input id="cameraUsername" name="username" autocomplete="username">
-        </label>
-        <label class="field">Contraseña
-          <input id="cameraPassword" name="password" type="password" autocomplete="current-password">
-        </label>
+        <label class="field">Usuario<input id="cameraUsername" name="username" autocomplete="username"></label>
+        <label class="field">Contraseña<input id="cameraPassword" name="password" type="password" autocomplete="current-password"></label>
       </div>
-      <p class="hint">La contraseña se cifra antes de guardarse. El URI RTSP almacenado nunca incluye credenciales.</p>
+      <p class="hint">Las credenciales se cifran antes de guardarse.</p>
       <div id="cameraFormError" class="form-error" role="alert"></div>
+      <div class="dialog-actions"><button type="button" class="button secondary" data-close="cameraDialog">Cancelar</button><button id="saveCameraBtn" class="button primary" type="submit">Validar y agregar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="scheduleDialog" class="schedule-dialog">
+    <form id="scheduleForm" method="dialog">
+      <input id="scheduleCameraID" type="hidden">
+      <div class="dialog-head">
+        <div><p class="eyebrow">GRABACIÓN PROGRAMADA</p><h2 id="scheduleCameraTitle">Horario</h2></div>
+        <button type="button" class="icon-button" data-close="scheduleDialog" aria-label="Cerrar">×</button>
+      </div>
+      <label class="schedule-enable"><input id="scheduleEnabled" type="checkbox"><span>Activar grabación por horario</span></label>
+      <div class="schedule-block">
+        <span class="schedule-label">Días</span>
+        <div class="weekday-grid" id="scheduleDays">
+          <label><input type="checkbox" value="1"><span>Lun</span></label>
+          <label><input type="checkbox" value="2"><span>Mar</span></label>
+          <label><input type="checkbox" value="3"><span>Mié</span></label>
+          <label><input type="checkbox" value="4"><span>Jue</span></label>
+          <label><input type="checkbox" value="5"><span>Vie</span></label>
+          <label><input type="checkbox" value="6"><span>Sáb</span></label>
+          <label><input type="checkbox" value="0"><span>Dom</span></label>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="field">Hora de inicio<input id="scheduleStart" type="time" value="00:00" required></label>
+        <label class="field">Hora final<input id="scheduleEnd" type="time" value="23:59" required></label>
+      </div>
+      <p class="hint">Si la hora final es menor que la inicial, la grabación termina al día siguiente. Se usa la zona horaria de este navegador.</p>
+      <div id="scheduleFormError" class="form-error" role="alert"></div>
       <div class="dialog-actions">
-        <button type="button" class="button secondary" data-close="cameraDialog">Cancelar</button>
-        <button id="saveCameraBtn" class="button primary" type="submit">Validar y agregar</button>
+        <button type="button" class="button secondary" data-close="scheduleDialog">Cancelar</button>
+        <button id="saveScheduleBtn" class="button primary" type="submit">Guardar horario</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="discoveryDialog" class="wide-dialog">
-    <div class="dialog-head">
-      <div><p class="eyebrow">WS-DISCOVERY</p><h2>Dispositivos encontrados</h2></div>
-      <button type="button" class="icon-button" data-close="discoveryDialog" aria-label="Cerrar">×</button>
-    </div>
+    <div class="dialog-head"><div><p class="eyebrow">WS-DISCOVERY</p><h2>Dispositivos encontrados</h2></div><button type="button" class="icon-button" data-close="discoveryDialog" aria-label="Cerrar">×</button></div>
     <p id="discoveryStatus" class="hint">Buscando cámaras ONVIF en la red local…</p>
     <div id="discoveryList" class="discovery-list"></div>
     <div class="dialog-actions"><button type="button" class="button secondary" data-close="discoveryDialog">Cerrar</button></div>
@@ -276,15 +275,9 @@
 
   <dialog id="confirmDialog" class="confirm-dialog">
     <form method="dialog">
-      <div class="dialog-head">
-        <div><p class="eyebrow">CONFIRMACIÓN</p><h2 id="confirmTitle">Confirmar acción</h2></div>
-        <button type="submit" value="cancel" class="icon-button" aria-label="Cerrar">×</button>
-      </div>
+      <div class="dialog-head"><div><p class="eyebrow">CONFIRMACIÓN</p><h2 id="confirmTitle">Confirmar acción</h2></div><button type="submit" value="cancel" class="icon-button" aria-label="Cerrar">×</button></div>
       <p id="confirmMessage" class="confirm-copy"></p>
-      <div class="dialog-actions">
-        <button type="submit" value="cancel" class="button secondary">Cancelar</button>
-        <button id="confirmAcceptBtn" type="submit" value="confirm" class="button danger-solid">Confirmar</button>
-      </div>
+      <div class="dialog-actions"><button type="submit" value="cancel" class="button secondary">Cancelar</button><button id="confirmAcceptBtn" type="submit" value="confirm" class="button danger-solid">Confirmar</button></div>
     </form>
   </dialog>
 
@@ -292,20 +285,14 @@
     <article class="camera-thumb-card">
       <button class="camera-thumb-media" type="button">
         <img class="camera-thumb-image" alt="" loading="lazy">
-        <div class="camera-thumb-fallback" hidden><span aria-hidden="true">▣</span><strong>Vista previa no disponible</strong></div>
-        <span class="live-chip"><i></i><span class="camera-status-text">COMPROBANDO</span></span>
-        <span class="open-overlay">Abrir transmisión</span>
+        <div class="camera-thumb-fallback" hidden><span aria-hidden="true">▣</span><strong>Sin vista previa</strong></div>
+        <span class="live-chip"><i></i><span class="camera-status-text">CARGANDO</span></span>
+        <span class="open-overlay"><strong class="camera-card-name"></strong><small class="camera-card-meta"></small></span>
       </button>
-      <div class="camera-thumb-body">
-        <div class="camera-thumb-heading">
-          <div><h2 class="camera-card-name"></h2><p class="camera-card-meta"></p></div>
-          <button class="camera-delete icon-button subtle" type="button" aria-label="Eliminar cámara">×</button>
-        </div>
-        <p class="camera-card-endpoint mono"></p>
-        <div class="camera-card-footer">
-          <span class="event-support pill"></span>
-          <label class="compact-toggle"><input class="record-toggle" type="checkbox"><span>Grabar eventos</span></label>
-        </div>
+      <div class="camera-hover-actions">
+        <label class="compact-toggle" title="Grabar cuando haya movimiento"><input class="record-toggle" type="checkbox"><span>REC</span></label>
+        <button class="camera-schedule icon-button" type="button" aria-label="Programar grabación" title="Programar grabación">◷</button>
+        <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar">×</button>
       </div>
     </article>
   </template>

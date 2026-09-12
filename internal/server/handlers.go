@@ -74,6 +74,9 @@ func (a *App) handleAddCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no se pudo guardar la cámara")
 		return
 	}
+	if full, getErr := a.store.Get(cam.ID); getErr == nil {
+		a.syncWatcher(full)
+	}
 	cam.Password = ""
 	writeJSON(w, http.StatusCreated, cam)
 }
@@ -116,13 +119,76 @@ func (a *App) handleRecordingSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no se pudo guardar la configuración")
 		return
 	}
-	if req.Enabled && !cam.EventsSupported {
-		_, _ = a.store.SetRecording(id, false, cam.PostRollSeconds)
-		writeError(w, http.StatusConflict, "la cámara no reporta soporte de eventos ONVIF")
-		return
-	}
 	if full, getErr := a.store.Get(id); getErr == nil {
 		a.syncWatcher(full)
+	}
+	writeJSON(w, http.StatusOK, cam)
+}
+
+func (a *App) handleScheduleSettings(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Enabled  bool   `json:"enabled"`
+		Days     []int  `json:"days"`
+		Start    string `json:"start"`
+		End      string `json:"end"`
+		Timezone string `json:"timezone"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "solicitud inválida")
+		return
+	}
+
+	start := strings.TrimSpace(req.Start)
+	end := strings.TrimSpace(req.End)
+	timezone := strings.TrimSpace(req.Timezone)
+	if timezone == "" {
+		timezone = "Local"
+	}
+	if req.Enabled {
+		if _, _, ok := parseClock(start); !ok {
+			writeError(w, http.StatusBadRequest, "hora de inicio inválida")
+			return
+		}
+		if _, _, ok := parseClock(end); !ok {
+			writeError(w, http.StatusBadRequest, "hora final inválida")
+			return
+		}
+		if timezone != "Local" {
+			if _, err := time.LoadLocation(timezone); err != nil {
+				writeError(w, http.StatusBadRequest, "zona horaria inválida")
+				return
+			}
+		}
+	}
+
+	daySet := make(map[int]bool, 7)
+	for _, day := range req.Days {
+		if day < 0 || day > 6 {
+			writeError(w, http.StatusBadRequest, "día de programación inválido")
+			return
+		}
+		daySet[day] = true
+	}
+	days := make([]int, 0, len(daySet))
+	for day := 0; day <= 6; day++ {
+		if daySet[day] {
+			days = append(days, day)
+		}
+	}
+	if req.Enabled && len(days) == 0 {
+		writeError(w, http.StatusBadRequest, "selecciona al menos un día")
+		return
+	}
+
+	cam, err := a.store.SetSchedule(id, req.Enabled, days, start, end, timezone)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "cámara no encontrada")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "no se pudo guardar la programación")
+		return
 	}
 	writeJSON(w, http.StatusOK, cam)
 }
@@ -211,7 +277,16 @@ func (a *App) handleRecordingSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "cámara no encontrada")
 		return
 	}
-	image, err := a.media.RecordingSnapshot(r.Context(), cameraID, name)
+	offset := 0.5
+	if raw := strings.TrimSpace(r.URL.Query().Get("at")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || parsed < 0 || parsed > 86400 {
+			writeError(w, http.StatusBadRequest, "posición de miniatura inválida")
+			return
+		}
+		offset = parsed
+	}
+	image, err := a.media.RecordingSnapshot(r.Context(), cameraID, name, offset)
 	if err != nil {
 		if errors.Is(err, media.ErrRecordingNotFound) {
 			writeError(w, http.StatusNotFound, "grabación no encontrada")
