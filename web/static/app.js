@@ -9,6 +9,7 @@ const state = {
   snapshotRevision: Date.now(),
   pendingPlayback: null,
   sessions: [],
+  profile: null,
   telegram: null,
   playback: { recording: null, offset: 0, startedAt: 0, timer: null, playing: false },
 };
@@ -55,6 +56,7 @@ const viewMeta = {
   recordings: { eyebrow: 'ARCHIVO', title: 'Grabaciones', subtitle: 'Historial de vídeo por cámara.' },
   events: { eyebrow: 'ACTIVIDAD', title: 'Eventos', subtitle: 'Movimiento y eventos recientes.' },
   sessions: { eyebrow: 'SEGURIDAD', title: 'Sesiones', subtitle: 'Accesos persistentes al visor.' },
+  profile: { eyebrow: 'CUENTA', title: 'Perfil', subtitle: 'Usuario y contraseña del visor.' },
   integrations: { eyebrow: 'MÓDULOS', title: 'Integraciones', subtitle: 'Servicios externos y automatizaciones.' },
 };
 
@@ -64,6 +66,7 @@ const routePathByView = {
   recordings: '/grabaciones',
   events: '/eventos',
   sessions: '/sesiones',
+  profile: '/perfil',
   integrations: '/integraciones',
 };
 
@@ -82,6 +85,7 @@ function parseCurrentRoute() {
   if (path === '/grabaciones') return { view: 'recordings', clearRecordingCamera: true };
   if (path === '/eventos') return { view: 'events' };
   if (path === '/sesiones') return { view: 'sessions' };
+  if (path === '/perfil') return { view: 'profile' };
   if (path === '/integraciones') return { view: 'integrations' };
 
   if (path.startsWith('/camara/')) {
@@ -304,6 +308,7 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   if (view === 'recordings') loadRecordings();
   if (view === 'events') refreshEvents(false);
   if (view === 'sessions') loadSessions();
+  if (view === 'profile') loadProfile();
   if (view === 'integrations') loadTelegramStatus();
 }
 
@@ -1402,6 +1407,92 @@ async function closeOtherSessions() {
   }
 }
 
+async function loadProfile() {
+  const loading = $('#profileLoading');
+  const form = $('#profileForm');
+  const errorBox = $('#profileError');
+  const messageBox = $('#profileMessage');
+  loading.hidden = false;
+  form.hidden = true;
+  errorBox.textContent = '';
+  messageBox.textContent = '';
+  try {
+    state.profile = await api('/api/profile');
+    const username = state.profile?.username || '';
+    $('#profileUsername').value = username;
+    $('#profileDisplayName').textContent = username || 'Usuario';
+    $('#profileAvatar').textContent = (username.trim()[0] || 'U').toUpperCase();
+    $('#profileCurrentPassword').value = '';
+    $('#profileNewPassword').value = '';
+    $('#profileConfirmPassword').value = '';
+    form.hidden = false;
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) {
+      errorBox.textContent = error.message;
+      form.hidden = false;
+    }
+  } finally {
+    loading.hidden = true;
+  }
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  const username = $('#profileUsername').value.trim();
+  const currentPassword = $('#profileCurrentPassword').value;
+  const newPassword = $('#profileNewPassword').value;
+  const confirmPassword = $('#profileConfirmPassword').value;
+  const errorBox = $('#profileError');
+  const messageBox = $('#profileMessage');
+  const button = $('#profileSaveBtn');
+  errorBox.textContent = '';
+  messageBox.textContent = '';
+
+  if (!username || !currentPassword) {
+    errorBox.textContent = 'Escribe el usuario y tu contraseña actual.';
+    return;
+  }
+  if (newPassword && newPassword.length < 8) {
+    errorBox.textContent = 'La contraseña nueva debe tener al menos 8 caracteres.';
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    errorBox.textContent = 'Las contraseñas nuevas no coinciden.';
+    return;
+  }
+
+  button.disabled = true;
+  const previousLabel = button.textContent;
+  button.textContent = 'Guardando…';
+  try {
+    const result = await api('/api/profile', {
+      method: 'PUT',
+      body: JSON.stringify({
+        username,
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
+    state.profile = { username: result.username };
+    state.auth.username = result.username;
+    $('#profileDisplayName').textContent = result.username;
+    $('#profileAvatar').textContent = (result.username?.trim()[0] || 'U').toUpperCase();
+    $('#profileCurrentPassword').value = '';
+    $('#profileNewPassword').value = '';
+    $('#profileConfirmPassword').value = '';
+    const closed = Number(result.other_sessions_closed) || 0;
+    messageBox.textContent = result.password_changed
+      ? `Perfil actualizado. ${closed} sesión(es) adicional(es) cerradas.`
+      : 'Perfil actualizado correctamente.';
+    setStatus('Perfil actualizado', true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
+}
+
 async function loadTelegramStatus({ skeleton = state.telegram === null } = {}) {
   const loading = $('#telegramLoading');
   if (skeleton) {
@@ -1511,6 +1602,11 @@ async function saveTelegramToken(event) {
 async function saveTelegramSettings(event) {
   event.preventDefault();
   const button = $('#telegramSaveSettingsBtn');
+  const videoSeconds = Number($('#telegramVideoSeconds').value) || 5;
+  if (videoSeconds < 3 || videoSeconds > 60) {
+    setStatus('La duración de Telegram debe estar entre 3 y 60 segundos.', false);
+    return;
+  }
   button.disabled = true;
   try {
     state.telegram = await api('/api/integrations/telegram', {
@@ -1519,7 +1615,7 @@ async function saveTelegramSettings(event) {
         token: '',
         notifications_enabled: $('#telegramNotificationsEnabled').checked,
         media_mode: $('#telegramMediaMode').value,
-        video_seconds: Number($('#telegramVideoSeconds').value) || 5,
+        video_seconds: videoSeconds,
       }),
     });
     renderTelegramStatus();
@@ -1710,6 +1806,7 @@ $('#discoverBtn').addEventListener('click', discover);
 $('#emptyDiscoverBtn').addEventListener('click', discover);
 $('#eventsRefreshBtn').addEventListener('click', () => refreshEvents(true));
 $('#closeOtherSessionsBtn').addEventListener('click', closeOtherSessions);
+$('#profileForm').addEventListener('submit', saveProfile);
 $('#telegramOpenBtn').addEventListener('click', async () => {
   $('#telegramPanel').hidden = false;
   await loadTelegramStatus();

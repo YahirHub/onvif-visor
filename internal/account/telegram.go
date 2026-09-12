@@ -12,7 +12,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const TelegramCodeDuration = 10 * time.Minute
+const (
+	TelegramCodeDuration        = 10 * time.Minute
+	TelegramVideoMinSeconds     = 3
+	TelegramVideoMaxSeconds     = 60
+	TelegramVideoDefaultSeconds = 5
+)
 
 type TelegramConfig struct {
 	TokenCipher          string    `json:"-"`
@@ -56,7 +61,7 @@ func (s *Store) SaveTelegramConfig(ctx context.Context, cfg TelegramConfig) erro
 	if cfg.MediaMode != "photo" && cfg.MediaMode != "video" {
 		return errors.New("invalid telegram media mode")
 	}
-	if cfg.VideoSeconds < 3 || cfg.VideoSeconds > 10 {
+	if cfg.VideoSeconds < TelegramVideoMinSeconds || cfg.VideoSeconds > TelegramVideoMaxSeconds {
 		return errors.New("invalid telegram video duration")
 	}
 	enabled := 0
@@ -86,7 +91,7 @@ func (s *Store) UpdateTelegramSettings(ctx context.Context, notifications bool, 
 	if mediaMode != "photo" && mediaMode != "video" {
 		return errors.New("invalid telegram media mode")
 	}
-	if videoSeconds < 3 || videoSeconds > 10 {
+	if videoSeconds < TelegramVideoMinSeconds || videoSeconds > TelegramVideoMaxSeconds {
 		return errors.New("invalid telegram video duration")
 	}
 	enabled := 0

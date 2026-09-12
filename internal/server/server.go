@@ -119,6 +119,8 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/session", a.handleSessionStatus)
 	a.mux.HandleFunc("POST /api/session", a.handleSessionLogin)
 	a.mux.HandleFunc("DELETE /api/session", a.handleSessionLogout)
+	a.mux.HandleFunc("GET /api/profile", a.handleProfile)
+	a.mux.HandleFunc("PUT /api/profile", a.handleProfileUpdate)
 	a.mux.HandleFunc("GET /api/sessions", a.handleSessions)
 	a.mux.HandleFunc("DELETE /api/sessions/others", a.handleDeleteOtherSessions)
 	a.mux.HandleFunc("DELETE /api/sessions/{id}", a.handleDeleteSession)
@@ -147,6 +149,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /grabaciones/{cameraID}", a.handleApp)
 	a.mux.HandleFunc("GET /eventos", a.handleApp)
 	a.mux.HandleFunc("GET /sesiones", a.handleApp)
+	a.mux.HandleFunc("GET /perfil", a.handleApp)
 	a.mux.HandleFunc("GET /integraciones", a.handleApp)
 	a.mux.Handle("GET /", http.FileServer(http.FS(a.assets)))
 }

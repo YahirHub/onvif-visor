@@ -787,3 +787,19 @@ select:focus { border-color: rgba(80,208,173,.55); box-shadow: 0 0 0 3px rgba(80
   .event-thumb.loading::before,
   .skeleton-text { animation: none !important; }
 }
+
+/* Perfil */
+.profile-card { max-width: 680px; }
+.profile-card.settings-form { padding: 1rem; }
+.profile-skeleton { display: grid; grid-template-columns: 48px minmax(0,1fr); gap: .8rem; padding: 1rem; border-radius: 10px; background: #0d1217; }
+.profile-skeleton .skeleton-field { grid-column: 1 / -1; }
+.profile-avatar { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 1rem; font-weight: 900; }
+.profile-identity { display: flex; align-items: center; gap: .7rem; padding-bottom: .25rem; }
+.profile-identity > div { min-width: 0; display: grid; gap: .08rem; }
+.profile-identity strong { overflow: hidden; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.profile-identity span { color: #708091; font-size: .59rem; }
+#profileMessage { color: var(--accent); }
+@media (max-width: 760px) {
+  .profile-card { max-width: none; }
+  .profile-card.settings-form { padding: .8rem; }
+}

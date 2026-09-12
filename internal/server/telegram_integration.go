@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +36,7 @@ func (a *App) handleTelegramStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "No se pudo consultar Telegram.")
 		return
 	}
-	view := telegramStatusView{Configured: ok, MediaMode: "photo", VideoSeconds: 5}
+	view := telegramStatusView{Configured: ok, MediaMode: "photo", VideoSeconds: account.TelegramVideoDefaultSeconds}
 	if ok {
 		view.BotID = cfg.BotID
 		view.BotUsername = cfg.BotUsername
@@ -68,14 +71,14 @@ func (a *App) handleTelegramSave(w http.ResponseWriter, r *http.Request) {
 		req.MediaMode = "photo"
 	}
 	if req.VideoSeconds == 0 {
-		req.VideoSeconds = 5
+		req.VideoSeconds = account.TelegramVideoDefaultSeconds
 	}
 	if req.MediaMode != "photo" && req.MediaMode != "video" {
 		writeError(w, http.StatusBadRequest, "El medio debe ser foto o vídeo.")
 		return
 	}
-	if req.VideoSeconds < 3 || req.VideoSeconds > 10 {
-		writeError(w, http.StatusBadRequest, "El fragmento debe durar entre 3 y 10 segundos.")
+	if req.VideoSeconds < account.TelegramVideoMinSeconds || req.VideoSeconds > account.TelegramVideoMaxSeconds {
+		writeError(w, http.StatusBadRequest, "El fragmento debe durar entre 3 y 60 segundos.")
 		return
 	}
 
@@ -271,7 +274,7 @@ func (a *App) handleTelegramMessage(ctx context.Context, client *tg.Client, toke
 	case "/start", "/login":
 		if command.Arg == "" {
 			if linked {
-				_ = client.SendMessage(ctx, token, message.Chat.ID, "Este chat ya está vinculado. Usa /camaras, /foto <cámara> o /video <cámara>.")
+				_ = client.SendMessage(ctx, token, message.Chat.ID, "Este chat ya está vinculado. Usa /camaras, /foto <cámara> o /video <cámara> [segundos].")
 			} else {
 				_ = client.SendMessage(ctx, token, message.Chat.ID, "Genera un código de 4 dígitos en ONVIF Visor y envía /login CODIGO. El código dura 10 minutos.")
 			}
@@ -292,7 +295,7 @@ func (a *App) handleTelegramMessage(ctx context.Context, client *tg.Client, toke
 			_ = client.SendMessage(ctx, token, message.Chat.ID, "No se pudo vincular el chat.")
 			return
 		}
-		_ = client.SendMessage(ctx, token, message.Chat.ID, "Chat vinculado correctamente con ONVIF Visor. Usa /camaras, /foto <cámara> o /video <cámara>.")
+		_ = client.SendMessage(ctx, token, message.Chat.ID, "Chat vinculado correctamente con ONVIF Visor. Usa /camaras, /foto <cámara> o /video <cámara> [segundos].")
 	case "/camaras":
 		if !linked {
 			a.telegramLoginRequired(ctx, client, token, message.Chat.ID)
@@ -319,7 +322,8 @@ func (a *App) handleTelegramMessage(ctx context.Context, client *tg.Client, toke
 			a.telegramLoginRequired(ctx, client, token, message.Chat.ID)
 			return
 		}
-		a.sendTelegramCameraVideo(ctx, client, token, message.Chat.ID, command.Arg)
+		// Un clip largo no debe bloquear el long polling de Telegram.
+		go a.sendTelegramCameraVideo(ctx, client, token, message.Chat.ID, command.Arg)
 	}
 }
 
@@ -401,31 +405,87 @@ func (a *App) sendTelegramCameraPhoto(ctx context.Context, client *tg.Client, to
 	_ = client.SendPhoto(mediaCtx, token, chatID, image, "📷 "+cam.Name)
 }
 
-func (a *App) sendTelegramCameraVideo(ctx context.Context, client *tg.Client, token string, chatID int64, cameraQuery string) {
-	cam, err := a.resolveTelegramCamera(cameraQuery)
+type telegramVideoRequest struct {
+	CameraQuery string
+	Seconds     int
+}
+
+func parseTelegramVideoRequest(arg string, defaultSeconds int) (telegramVideoRequest, error) {
+	arg = strings.TrimSpace(arg)
+	if defaultSeconds < account.TelegramVideoMinSeconds || defaultSeconds > account.TelegramVideoMaxSeconds {
+		defaultSeconds = account.TelegramVideoDefaultSeconds
+	}
+	request := telegramVideoRequest{CameraQuery: arg, Seconds: defaultSeconds}
+	fields := strings.Fields(arg)
+	if len(fields) < 2 {
+		return request, nil
+	}
+	seconds, err := strconv.Atoi(fields[len(fields)-1])
 	if err != nil {
-		_ = client.SendMessage(ctx, token, chatID, "Cámara no encontrada. Usa /camaras para ver los nombres disponibles.")
+		return request, nil
+	}
+	if seconds < account.TelegramVideoMinSeconds || seconds > account.TelegramVideoMaxSeconds {
+		return telegramVideoRequest{}, fmt.Errorf("la duración debe estar entre %d y %d segundos", account.TelegramVideoMinSeconds, account.TelegramVideoMaxSeconds)
+	}
+	cameraQuery := strings.TrimSpace(strings.Join(fields[:len(fields)-1], " "))
+	if cameraQuery == "" {
+		return telegramVideoRequest{}, errors.New("indica el nombre de la cámara")
+	}
+	return telegramVideoRequest{CameraQuery: cameraQuery, Seconds: seconds}, nil
+}
+
+func (a *App) sendTelegramCameraVideo(ctx context.Context, client *tg.Client, token string, chatID int64, commandArg string) {
+	select {
+	case a.telegramNotifySem <- struct{}{}:
+		defer func() { <-a.telegramNotifySem }()
+	default:
+		_ = client.SendMessage(ctx, token, chatID, "Ya se está generando otro medio. Intenta de nuevo en unos segundos.")
 		return
 	}
+
 	cfg, ok, err := a.accounts.GetTelegramConfig(ctx)
 	if err != nil || !ok {
 		return
 	}
+	seconds := cfg.VideoSeconds
+	if seconds < account.TelegramVideoMinSeconds || seconds > account.TelegramVideoMaxSeconds {
+		seconds = account.TelegramVideoDefaultSeconds
+	}
+
+	// Primero intenta el argumento completo. Así una cámara llamada "Patio 2"
+	// no se confunde con un override de duración.
+	cam, resolveErr := a.resolveTelegramCamera(commandArg)
+	if resolveErr != nil {
+		request, parseErr := parseTelegramVideoRequest(commandArg, seconds)
+		if parseErr != nil {
+			_ = client.SendMessage(ctx, token, chatID, "No se pudo preparar el vídeo: "+parseErr.Error()+".")
+			return
+		}
+		seconds = request.Seconds
+		cam, resolveErr = a.resolveTelegramCamera(request.CameraQuery)
+	}
+	if resolveErr != nil {
+		_ = client.SendMessage(ctx, token, chatID, "Cámara no encontrada. Usa /camaras para ver los nombres disponibles.")
+		return
+	}
+
 	streamURI, err := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
 	if err != nil {
 		_ = client.SendMessage(ctx, token, chatID, "No se pudo abrir la cámara.")
 		return
 	}
-	_ = client.SendMessage(ctx, token, chatID, "Preparando fragmento de vídeo…")
-	mediaCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	_ = client.SendMessage(ctx, token, chatID, "Preparando fragmento de "+strconv.Itoa(seconds)+" s…")
+	mediaCtx, cancel := context.WithTimeout(ctx, time.Duration(seconds)*time.Second+35*time.Second)
 	defer cancel()
-	path, err := a.media.CaptureClip(mediaCtx, streamURI, time.Duration(cfg.VideoSeconds)*time.Second)
+	path, err := a.media.CaptureClip(mediaCtx, streamURI, time.Duration(seconds)*time.Second)
 	if err != nil {
 		_ = client.SendMessage(ctx, token, chatID, "No se pudo generar el fragmento en este momento.")
 		return
 	}
 	defer os.Remove(path)
-	_ = client.SendVideoFile(mediaCtx, token, chatID, path, "🎥 "+cam.Name)
+	if err := client.SendVideoFile(mediaCtx, token, chatID, path, "🎥 "+cam.Name+" · "+strconv.Itoa(seconds)+" s"); err != nil {
+		_ = client.SendMessage(ctx, token, chatID, "El vídeo se generó, pero Telegram no pudo recibirlo.")
+	}
 }
 
 func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status media.RecordingStatus) {
@@ -448,7 +508,7 @@ func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status
 	a.telegramLastSent[cam.ID] = now
 	a.telegramNotifyMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(a.ctx, 35*time.Second)
+	ctx, cancel := context.WithTimeout(a.ctx, time.Duration(account.TelegramVideoMaxSeconds)*time.Second+35*time.Second)
 	defer cancel()
 	cfg, ok, err := a.accounts.GetTelegramConfig(ctx)
 	if err != nil || !ok || !cfg.NotificationsEnabled {

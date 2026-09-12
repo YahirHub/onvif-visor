@@ -21,5 +21,5 @@ Completar la entrega de SQLite/sesiones/Telegram/multivista añadiendo estados s
 - Smoke HTTP del binario nuevo en loopback: `/`, `/camaras`, `/sesiones`, `/integraciones`, `/app.js`, `/styles.css` responden 200 y contienen los nuevos skeletons.
 - Smoke autenticado temporal: login 204, `/api/sessions` 200 con sesión actual y `/api/integrations/telegram` 200 sin token configurado.
 
-# Despliegue real pendiente
-El proceso productivo que sigue atendiendo `0.0.0.0:8081` es el binario anterior. La base real todavía no tiene `data/accounts.db`. Para el primer arranque del binario nuevo en LAN hace falta volver a proporcionar las credenciales bootstrap existentes una sola vez. Se verificó que el proceso antiguo sí tiene esas credenciales en su entorno o argumentos, pero no se extrajeron ni copiaron por seguridad. El siguiente paso es recibir usuario/contraseña bootstrap del operador, arrancar el binario nuevo una vez, comprobar SQLite y después ya podrá reiniciarse sin volver a proporcionar la contraseña.
+# Despliegue real
+Completado manualmente después de recibir las credenciales bootstrap del operador. Se creó `data/accounts.db` con permisos 0600, se validó el login SQLite, se detuvo el proceso anterior y se arrancó el binario nuevo en `0.0.0.0:8081`. `/camaras`, `/multivista`, `/grabaciones`, `/eventos`, `/sesiones` e `/integraciones` respondieron 200 y `/api/sessions` respondió 401 sin sesión, confirmando que la protección persistente quedó activa. El repositorio permaneció limpio durante esa migración operativa.

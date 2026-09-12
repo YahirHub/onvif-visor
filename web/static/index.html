@@ -60,6 +60,9 @@
         <button class="nav-item" type="button" data-view="sessions" title="Sesiones">
           <span class="nav-icon" aria-hidden="true">◎</span><span>Sesiones</span>
         </button>
+        <button class="nav-item" type="button" data-view="profile" title="Perfil">
+          <span class="nav-icon" aria-hidden="true">◇</span><span>Perfil</span>
+        </button>
         <button class="nav-item" type="button" data-view="integrations" title="Integraciones">
           <span class="nav-icon" aria-hidden="true">⌘</span><span>Integraciones</span>
         </button>
@@ -230,6 +233,42 @@
           <div id="sessionsList" class="settings-list"></div>
         </section>
 
+        <section id="profileView" class="app-view" hidden>
+          <div class="section-toolbar settings-toolbar">
+            <div><h2>Perfil</h2><p>Actualiza tus credenciales de acceso.</p></div>
+          </div>
+          <div id="profileLoading" class="profile-card profile-skeleton" aria-hidden="true">
+            <span class="skeleton skeleton-avatar profile-avatar"></span>
+            <div class="skeleton-copy"><span class="skeleton skeleton-line medium"></span><span class="skeleton skeleton-line short"></span></div>
+            <span class="skeleton skeleton-field"></span>
+            <span class="skeleton skeleton-field"></span>
+          </div>
+          <form id="profileForm" class="profile-card settings-form" hidden novalidate>
+            <div class="profile-identity">
+              <span id="profileAvatar" class="profile-avatar" aria-hidden="true">U</span>
+              <div><strong id="profileDisplayName">Usuario</strong><span>Cuenta local de ONVIF Visor</span></div>
+            </div>
+            <label class="field">Usuario
+              <input id="profileUsername" autocomplete="username" minlength="3" maxlength="64" required>
+            </label>
+            <label class="field">Contraseña actual
+              <input id="profileCurrentPassword" type="password" autocomplete="current-password" required>
+            </label>
+            <div class="form-row">
+              <label class="field">Contraseña nueva
+                <input id="profileNewPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Déjala vacía para conservarla">
+              </label>
+              <label class="field">Confirmar contraseña nueva
+                <input id="profileConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128">
+              </label>
+            </div>
+            <p class="hint">Si cambias la contraseña, se cerrarán automáticamente las demás sesiones y esta sesión permanecerá activa.</p>
+            <div id="profileMessage" class="form-message" role="status" aria-live="polite"></div>
+            <div id="profileError" class="form-error" role="alert" aria-live="assertive"></div>
+            <button id="profileSaveBtn" class="button primary" type="submit">Guardar cambios</button>
+          </form>
+        </section>
+
         <section id="integrationsView" class="app-view" hidden>
           <div class="section-toolbar settings-toolbar">
             <div><h2>Integraciones</h2><p>Módulos externos y automatizaciones.</p></div>
@@ -279,10 +318,11 @@
                       <option value="video">Fragmento de vídeo</option>
                     </select>
                   </label>
-                  <label class="field">Duración del vídeo
-                    <input id="telegramVideoSeconds" type="number" min="3" max="10" value="5">
+                  <label class="field">Duración por defecto
+                    <input id="telegramVideoSeconds" type="number" min="3" max="60" value="5" inputmode="numeric">
                   </label>
                 </div>
+                <p class="hint">Se usa en alertas de vídeo y en <span class="mono">/video Cámara</span>. Puedes sobrescribirla con <span class="mono">/video Cámara 30</span> (3–60 s).</p>
                 <button id="telegramSaveSettingsBtn" class="button secondary" type="submit">Guardar opciones</button>
               </form>
 

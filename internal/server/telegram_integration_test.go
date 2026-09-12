@@ -21,6 +21,34 @@ func TestParseTelegramCommand(t *testing.T) {
 	}
 }
 
+func TestParseTelegramVideoRequest(t *testing.T) {
+	tests := []struct {
+		input          string
+		defaultSeconds int
+		camera         string
+		seconds        int
+		wantErr        bool
+	}{
+		{input: "Cocina", defaultSeconds: 8, camera: "Cocina", seconds: 8},
+		{input: "Cocina 30", defaultSeconds: 8, camera: "Cocina", seconds: 30},
+		{input: "Patio trasero 45", defaultSeconds: 5, camera: "Patio trasero", seconds: 45},
+		{input: "Cocina 61", defaultSeconds: 5, wantErr: true},
+		{input: "Cocina 2", defaultSeconds: 5, wantErr: true},
+	}
+	for _, tt := range tests {
+		got, err := parseTelegramVideoRequest(tt.input, tt.defaultSeconds)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("parseTelegramVideoRequest(%q) expected error, got %#v", tt.input, got)
+			}
+			continue
+		}
+		if err != nil || got.CameraQuery != tt.camera || got.Seconds != tt.seconds {
+			t.Fatalf("parseTelegramVideoRequest(%q) = %#v err=%v, want camera=%q seconds=%d", tt.input, got, err, tt.camera, tt.seconds)
+		}
+	}
+}
+
 func TestValidFourDigitCode(t *testing.T) {
 	for _, valid := range []string{"0000", "1234", "9999"} {
 		if !validFourDigitCode(valid) {

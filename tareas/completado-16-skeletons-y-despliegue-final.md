@@ -26,3 +26,6 @@ Completar la entrega pendiente: estados skeleton en cargas relevantes, validaci�
 - Commit final tras confirmar el despliegue, o commit de código previo si se necesita esperar las credenciales.
 
 Las credenciales del proceso anterior no se extraen ni se copian automáticamente por seguridad; deben volver a proporcionarse explícitamente para la migración inicial.
+
+## Resultado final
+Completado. La migración real se hizo manualmente con el usuario bootstrap suministrado por el operador, se creó `data/accounts.db` con permisos 0600, se detuvo el proceso anterior y se levantó el binario nuevo en `0.0.0.0:8081`. Las rutas públicas de la SPA respondieron 200 y los endpoints protegidos devolvieron 401 sin sesión, confirmando que la autenticación SQLite quedó activa.

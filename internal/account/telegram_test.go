@@ -59,3 +59,22 @@ func TestTelegramCodeIsSingleUseAndConfigPersists(t *testing.T) {
 		t.Fatalf("telegram config still exists: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestTelegramVideoDurationSupportsThirtySeconds(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg := TelegramConfig{TokenCipher: "cipher", BotID: 1, BotUsername: "bot", NotificationsEnabled: true, MediaMode: "video", VideoSeconds: 30}
+	if err := s.SaveTelegramConfig(ctx, cfg); err != nil {
+		t.Fatalf("SaveTelegramConfig(30s) error = %v", err)
+	}
+	if err := s.UpdateTelegramSettings(ctx, true, "video", 60); err != nil {
+		t.Fatalf("UpdateTelegramSettings(60s) error = %v", err)
+	}
+	if err := s.UpdateTelegramSettings(ctx, true, "video", 61); err == nil {
+		t.Fatal("expected 61s duration to fail")
+	}
+}

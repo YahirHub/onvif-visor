@@ -173,7 +173,7 @@ func TestUIRoutesServeApplicationShell(t *testing.T) {
 	}
 	app.routes()
 
-	for _, path := range []string{"/", "/camaras", "/camara/cam-1", "/multivista", "/grabaciones", "/grabaciones/cam-1", "/eventos", "/sesiones", "/integraciones"} {
+	for _, path := range []string{"/", "/camaras", "/camara/cam-1", "/multivista", "/grabaciones", "/grabaciones/cam-1", "/eventos", "/sesiones", "/perfil", "/integraciones"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		app.mux.ServeHTTP(rec, req)

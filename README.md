@@ -13,6 +13,7 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Interfaz web profesional embebida dentro del binario Go.
 - Login propio del frontend respaldado por SQLite embebido: contraseñas bcrypt y sesiones `HttpOnly` persistentes de 30 días que sobreviven reinicios.
 - Vista **Sesiones** con IP/dispositivo/actividad y revocación individual o cierre de todas las demás sesiones conservando la actual.
+- Vista **Perfil** para cambiar usuario y contraseña; exige la clave actual y al cambiarla revoca automáticamente las demás sesiones.
 - Galería inicial tipo thumbnails: cada cámara obtiene un snapshot JPEG bajo demanda en vez de abrir un stream continuo.
 - Click en una miniatura para abrir la transmisión RTSP -> MJPEG en tiempo real con cola de un solo frame: si el cliente se atrasa se descartan cuadros viejos en vez de acumular delay.
 - Multivista adaptable de hasta 9 cámaras: 2 mitad/mitad, 3 con vista principal + dos secundarias, 4 en 2x2, 5-6 en 3x2 y 7-9 en 3x3.
@@ -31,7 +32,7 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Escritura Matroska con clusters cortos, flush frecuente y sincronización periódica a disco para reducir el daño ante una interrupción brusca.
 - Compresión H.264 en segundo plano al cerrar un clip; el original sólo se reemplaza atómicamente cuando el resultado es válido y realmente ahorra espacio.
 - Módulo **Integraciones > Telegram**: valida el token con Bot API, lo guarda cifrado, vincula chats con códigos de 4 dígitos de un solo uso válidos 10 minutos y permite eliminar por completo la integración.
-- Alertas Telegram configurables por evento con foto o fragmento MP4 de 3–10 s, además de comandos `/camaras`, `/foto <camara>` y `/video <camara>` para chats vinculados.
+- Alertas Telegram configurables por evento con foto o fragmento MP4 de 3–60 s, además de `/camaras`, `/foto <camara>`, `/video <camara>` y `/video <camara> <segundos>` para chats vinculados.
 - Reproducción web de clips mediante FFmpeg -> MJPEG, con pausa/reanudación y seek por segundos.
 - Descarga autenticada del MKV original.
 - Servicio ligado a `127.0.0.1` por defecto.
@@ -47,6 +48,7 @@ internal/account/     SQLite embebido para usuarios, sesiones y estado Telegram
 internal/telegram/    cliente Bot API con long polling y envío de medios
 internal/media/       FFmpeg live, snapshots, grabación, clips y playback
 internal/server/      API HTTP, seguridad, sesiones, eventos e integraciones
+internal/service/     instalación en /opt y gestores systemd/OpenRC/runit/SysV
 web/                  HTML/CSS/JS embebidos con go:embed
 contexto/             bitácora Ponytail
 tareas/               tareas Ponytail
@@ -79,6 +81,31 @@ La compilación equivalente sin Make es:
 ```bash
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/onvif-visor ./cmd/onvif-visor
 ```
+
+## Instalar como servicio
+
+El instalador detecta automáticamente `systemd`, OpenRC, runit o SysV init, eleva privilegios con `sudo`, `doas` o `pkexec` cuando hace falta e instala el binario en `/opt/onvif-visor/onvif-visor`. En la primera instalación migra `data/` y `recordings/` desde `--source-dir` sólo si los destinos están vacíos; en actualizaciones nunca sobreescribe esos datos.
+
+```bash
+sudo ./dist/onvif-visor --install --listen 0.0.0.0:8081 --source-dir .
+```
+
+También crea `/usr/local/bin/onvif-visor`. El servicio puede administrarse sin conocer qué init system usa el host:
+
+```bash
+onvif-visor --service status
+sudo onvif-visor --service restart
+sudo onvif-visor --service stop
+sudo onvif-visor --service start
+```
+
+Para desinstalar el servicio y el binario, conservando cámaras, SQLite y grabaciones en `/opt/onvif-visor/`, usar:
+
+```bash
+sudo onvif-visor --remove
+```
+
+La configuración de instalación no contiene secretos: `install.json` guarda únicamente el gestor detectado, dirección de escucha y ruta de FFmpeg. Las cuentas permanecen en SQLite y los secretos de cámaras/Telegram siguen protegidos por `master.key`.
 
 ## Ejecutar localmente
 
@@ -130,8 +157,9 @@ Para una red no confiable se recomienda colocar TLS delante del servicio. El mod
 9. Pulsar una tarjeta o bloque de timeline para reproducir. El scrubber reinicia la reproducción desde el segundo seleccionado y el MKV original puede descargarse.
 10. Abrir **Eventos** para consultar movimiento y eventos recientes y saltar al instante de una grabación asociada.
 11. Abrir **Sesiones** para revisar accesos persistentes y cerrar todos los demás dispositivos sin perder la sesión actual.
-12. Abrir **Integraciones > Telegram** para validar el token, vincular chats y elegir alertas por foto o vídeo.
-13. En **Multivista**, usar **⛶** para fullscreen; en navegadores sin Fullscreen API se activa el modo teatro sin sidebar.
+12. Abrir **Perfil** para cambiar el usuario o contraseña; la clave actual confirma la operación y una clave nueva cierra las demás sesiones.
+13. Abrir **Integraciones > Telegram** para validar el token, vincular chats y elegir alertas por foto o vídeo y su duración por defecto.
+14. En **Multivista**, usar **⛶** para fullscreen; en navegadores sin Fullscreen API se activa el modo teatro sin sidebar.
 
 ## Endpoint manual
 
@@ -182,7 +210,7 @@ Cuando un evento incluye un estado explícito `false`, `off`, `inactive`, `idle`
 
 La vista **Integraciones** permite conectar un bot dedicado mediante el token de BotFather. El backend valida el token con `getMe`, cifra el secreto con la misma llave maestra AES-GCM usada para otros secretos y nunca lo devuelve a la API del navegador. Una vez configurado se muestra la URL `https://t.me/<bot>` y pueden generarse códigos de 4 dígitos de un solo uso, válidos 10 minutos. En Telegram se aceptan `/start CODIGO` y `/login CODIGO`.
 
-Un chat vinculado puede usar `/camaras`, `/foto <camara>` y `/video <camara>`. Las alertas automáticas de detección pueden enviar una foto actual o un MP4 corto de 3 a 10 segundos; el panel permite activar/desactivar avisos y elegir el medio. Para evitar carga excesiva, sólo se captura un vídeo Telegram a la vez y se aplica un intervalo mínimo por cámara. Eliminar la integración borra el token cifrado, los códigos y los chats vinculados.
+Un chat vinculado puede usar `/camaras`, `/foto <camara>`, `/video <camara>` y `/video <camara> <segundos>`. El primer formato usa la duración por defecto configurada en el panel; el segundo puede pedir entre 3 y 60 segundos, por ejemplo `/video Cocina 30`. Los clips se recodifican a H.264 1280px/12 fps con timestamps reiniciados, warm-up inicial y bitrate acotado para evitar los fragmentos de ~1 segundo y el efecto borroso observado al arrancar directamente desde RTSP. Para no bloquear el bot ni sobrecargar el host, el long polling continúa mientras se genera el clip y sólo se permite una captura Telegram simultánea. Las alertas automáticas usan la misma duración por defecto cuando el medio elegido es vídeo. Eliminar la integración borra el token cifrado, los códigos y los chats vinculados.
 
 ## Seguridad
 
@@ -221,6 +249,10 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 -ffmpeg             ruta de ffmpeg; default ffmpeg
 -ui-user            usuario bootstrap; también ONVIF_VISOR_USER
 -ui-password        contraseña bootstrap; también ONVIF_VISOR_PASSWORD
+-install            instalar/actualizar como servicio en /opt/onvif-visor
+-remove             retirar servicio/binario conservando data y recordings
+-service            status|start|stop|restart del servicio instalado
+-source-dir         origen de data/ y recordings/ para la primera instalación
 ```
 
 ## Validación del proyecto
