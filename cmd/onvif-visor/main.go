@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"onvif-visor/internal/account"
+	"onvif-visor/internal/analytics"
 	"onvif-visor/internal/media"
 	"onvif-visor/internal/server"
 	"onvif-visor/internal/service"
@@ -28,6 +29,8 @@ type serverOptions struct {
 	DataDir           string
 	RecordingsDir     string
 	FFmpeg            string
+	AnalyticsModel    string
+	ONNXRuntime       string
 	BootstrapUser     string
 	BootstrapPassword string
 }
@@ -53,6 +56,7 @@ func run(args []string) error {
 		return runServer(serverOptions{
 			Listen: runtimeCfg.Listen, DataDir: runtimeCfg.DataDir,
 			RecordingsDir: runtimeCfg.RecordingsDir, FFmpeg: runtimeCfg.FFmpeg,
+			AnalyticsModel: filepath.Join(runtimeCfg.ModelsDir, analytics.ModelFileName), ONNXRuntime: runtimeCfg.ONNXRuntime,
 		})
 	}
 
@@ -62,6 +66,8 @@ func run(args []string) error {
 	dataDir := flags.String("data-dir", "data", "directorio de configuración y credenciales")
 	recordings := flags.String("recordings-dir", "recordings", "directorio de grabaciones")
 	ffmpegPath := flags.String("ffmpeg", "ffmpeg", "ruta al ejecutable ffmpeg")
+	analyticsModel := flags.String("analytics-model", "", "ruta opcional al modelo NanoDet ONNX")
+	onnxRuntime := flags.String("onnxruntime", os.Getenv("ONVIF_ONNXRUNTIME"), "ruta opcional a libonnxruntime.so")
 	uiUser := flags.String("ui-user", os.Getenv("ONVIF_VISOR_USER"), "usuario bootstrap de acceso al visor")
 	uiPassword := flags.String("ui-password", os.Getenv("ONVIF_VISOR_PASSWORD"), "contraseña bootstrap de acceso al visor")
 	install := flags.Bool("install", false, "instalar o actualizar ONVIF Visor como servicio del sistema")
@@ -110,11 +116,16 @@ func run(args []string) error {
 			origin = cwd
 		}
 		result, err := service.Install(service.InstallOptions{
-			SourceDir: origin,
-			Listen:    installListen,
-			FFmpeg:    *ffmpegPath,
+			SourceDir:   origin,
+			Listen:      installListen,
+			FFmpeg:      *ffmpegPath,
+			ONNXRuntime: strings.TrimSpace(*onnxRuntime),
 			Prepare: func(runtimeCfg service.RuntimeConfig) error {
-				return prepareInstalledAccount(runtimeCfg, bootstrapUser, bootstrapPassword)
+				if err := prepareInstalledAccount(runtimeCfg, bootstrapUser, bootstrapPassword); err != nil {
+					return err
+				}
+				_, err := analytics.EnsureModel(runtimeCfg.ModelsDir)
+				return err
 			},
 		})
 		if err != nil {
@@ -162,6 +173,7 @@ func run(args []string) error {
 
 	return runServer(serverOptions{
 		Listen: *listenAddr, DataDir: *dataDir, RecordingsDir: *recordings, FFmpeg: *ffmpegPath,
+		AnalyticsModel: strings.TrimSpace(*analyticsModel), ONNXRuntime: strings.TrimSpace(*onnxRuntime),
 		BootstrapUser: bootstrapUser, BootstrapPassword: bootstrapPassword,
 	})
 }
@@ -234,12 +246,42 @@ func runServer(opts serverOptions) error {
 	if err != nil {
 		return fmt.Errorf("inicializar medios: %w", err)
 	}
+
+	modelPath := strings.TrimSpace(opts.AnalyticsModel)
+	if modelPath == "" {
+		modelPath, err = analytics.EnsureModel(filepath.Join(storePath, "models"))
+		if err != nil {
+			log.Printf("analytics=disabled reason=%v", err)
+		}
+	}
+	var analyticsManager *analytics.Manager
+	if modelPath != "" {
+		analyticsManager, err = analytics.New(analytics.Config{
+			DataDir: storePath, FFmpeg: opts.FFmpeg, ModelPath: modelPath,
+			RuntimePath: opts.ONNXRuntime, Media: mediaManager,
+		})
+		if err != nil {
+			log.Printf("analytics=disabled reason=%v", err)
+			analyticsManager = nil
+		} else {
+			status := analyticsManager.Status()
+			if status.Ready {
+				log.Printf("analytics=ready model=%s sample_fps=%d", status.Model, status.SampleFPS)
+			} else {
+				log.Printf("analytics=disabled model=%s reason=%s", status.Model, status.LastError)
+			}
+		}
+	}
+
 	assets, err := web.FS()
 	if err != nil {
 		return fmt.Errorf("cargar interfaz: %w", err)
 	}
-	app, err := server.New(server.Config{Store: cameraStore, Accounts: accountStore, Media: mediaManager, Assets: assets})
+	app, err := server.New(server.Config{Store: cameraStore, Accounts: accountStore, Media: mediaManager, Analytics: analyticsManager, Assets: assets})
 	if err != nil {
+		if analyticsManager != nil {
+			_ = analyticsManager.Close()
+		}
 		return fmt.Errorf("inicializar aplicación: %w", err)
 	}
 	defer app.Close()

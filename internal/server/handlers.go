@@ -76,6 +76,7 @@ func (a *App) handleAddCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if full, getErr := a.store.Get(cam.ID); getErr == nil {
 		a.syncWatcher(full)
+		a.syncAnalytics(full)
 	}
 	cam.Password = ""
 	writeJSON(w, http.StatusCreated, cam)
@@ -84,6 +85,9 @@ func (a *App) handleAddCamera(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	a.stopWatcher(id)
+	if a.analytics != nil {
+		a.analytics.RemoveCamera(id)
+	}
 	a.media.Stop(id)
 	if err := a.store.Delete(id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

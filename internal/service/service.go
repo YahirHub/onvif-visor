@@ -27,10 +27,11 @@ const (
 )
 
 type InstallOptions struct {
-	SourceDir string
-	Listen    string
-	FFmpeg    string
-	Prepare   func(RuntimeConfig) error
+	SourceDir   string
+	Listen      string
+	FFmpeg      string
+	ONNXRuntime string
+	Prepare     func(RuntimeConfig) error
 }
 
 type Result struct {
@@ -40,13 +41,16 @@ type Result struct {
 	CLI           string
 	DataDir       string
 	RecordingsDir string
+	ModelsDir     string
 }
 
 type RuntimeConfig struct {
 	Listen        string
 	FFmpeg        string
+	ONNXRuntime   string
 	DataDir       string
 	RecordingsDir string
+	ModelsDir     string
 }
 
 type installMetadata struct {
@@ -54,6 +58,7 @@ type installMetadata struct {
 	Manager     string    `json:"manager"`
 	Listen      string    `json:"listen"`
 	FFmpeg      string    `json:"ffmpeg"`
+	ONNXRuntime string    `json:"onnxruntime,omitempty"`
 	InstalledAt time.Time `json:"installed_at"`
 }
 
@@ -62,6 +67,7 @@ type paths struct {
 	Binary        string
 	DataDir       string
 	RecordingsDir string
+	ModelsDir     string
 	Metadata      string
 	LogDir        string
 }
@@ -88,6 +94,7 @@ func Install(opts InstallOptions) (Result, error) {
 	if opts.FFmpeg == "" {
 		opts.FFmpeg = "ffmpeg"
 	}
+	opts.ONNXRuntime = strings.TrimSpace(opts.ONNXRuntime)
 	if err := mgr.StopIfInstalled(); err != nil {
 		return Result{}, fmt.Errorf("stop existing %s service: %w", mgr.Name(), err)
 	}
@@ -98,12 +105,12 @@ func Install(opts InstallOptions) (Result, error) {
 		return Result{}, err
 	}
 	if opts.Prepare != nil {
-		if err := opts.Prepare(RuntimeConfig{Listen: opts.Listen, FFmpeg: opts.FFmpeg, DataDir: p.DataDir, RecordingsDir: p.RecordingsDir}); err != nil {
+		if err := opts.Prepare(RuntimeConfig{Listen: opts.Listen, FFmpeg: opts.FFmpeg, ONNXRuntime: opts.ONNXRuntime, DataDir: p.DataDir, RecordingsDir: p.RecordingsDir, ModelsDir: p.ModelsDir}); err != nil {
 			return Result{}, fmt.Errorf("prepare installed data: %w", err)
 		}
 	}
 	meta := installMetadata{
-		Schema: 1, Manager: mgr.Name(), Listen: opts.Listen, FFmpeg: opts.FFmpeg,
+		Schema: 1, Manager: mgr.Name(), Listen: opts.Listen, FFmpeg: opts.FFmpeg, ONNXRuntime: opts.ONNXRuntime,
 		InstalledAt: time.Now().UTC(),
 	}
 	if err := writeJSONAtomic(p.Metadata, meta, 0o644); err != nil {
@@ -172,7 +179,7 @@ func Runtime() (RuntimeConfig, error) {
 		ffmpeg = "ffmpeg"
 	}
 	return RuntimeConfig{
-		Listen: listen, FFmpeg: ffmpeg, DataDir: p.DataDir, RecordingsDir: p.RecordingsDir,
+		Listen: listen, FFmpeg: ffmpeg, ONNXRuntime: strings.TrimSpace(meta.ONNXRuntime), DataDir: p.DataDir, RecordingsDir: p.RecordingsDir, ModelsDir: p.ModelsDir,
 	}, nil
 }
 
@@ -206,7 +213,7 @@ func readMetadata(p paths) (installMetadata, error) {
 func resultFor(p paths, managerName string) Result {
 	return Result{
 		Manager: managerName, InstallDir: p.InstallDir, Binary: p.Binary, CLI: cliEntryPath(p),
-		DataDir: p.DataDir, RecordingsDir: p.RecordingsDir,
+		DataDir: p.DataDir, RecordingsDir: p.RecordingsDir, ModelsDir: p.ModelsDir,
 	}
 }
 

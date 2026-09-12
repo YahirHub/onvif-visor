@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/0x524a/onvif-go v1.1.4
+	github.com/yalue/onnxruntime_go v1.36.0
 	golang.org/x/crypto v0.48.0
 	modernc.org/sqlite v1.46.1
 )

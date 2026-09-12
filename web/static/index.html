@@ -199,11 +199,22 @@
 
                 <section class="timeline-panel">
                   <div class="timeline-head">
-                    <div><h3>Línea de tiempo</h3><p>Selecciona un bloque para reproducirlo.</p></div>
-                    <label class="date-filter"><span>Fecha</span><input id="recordingDate" type="date"></label>
+                    <div><h3>Línea de tiempo</h3><p>Grabaciones y momentos donde NanoDet detectó personas.</p></div>
+                    <div class="timeline-head-actions">
+                      <span id="analyticsStatus" class="analytics-status">Analítica…</span>
+                      <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
+                      <label class="date-filter"><span>Fecha</span><input id="recordingDate" type="date"></label>
+                    </div>
                   </div>
                   <div class="timeline-ruler" aria-hidden="true"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>
-                  <div id="recordingTimeline" class="recording-timeline"></div>
+                  <div class="timeline-track-row">
+                    <span class="timeline-track-label">Grabación</span>
+                    <div id="recordingTimeline" class="recording-timeline"></div>
+                  </div>
+                  <div class="timeline-track-row person-track-row">
+                    <span class="timeline-track-label">Personas</span>
+                    <div id="personTimeline" class="person-timeline" aria-label="Detecciones de personas"></div>
+                  </div>
                   <p id="timelineEmpty" class="timeline-empty" hidden>No hay clips en esta fecha.</p>
                 </section>
 

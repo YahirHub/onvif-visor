@@ -1,6 +1,6 @@
 # ONVIF Visor
 
-Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, permite agregarlos con credenciales, muestra previews y transmisiones en vivo, ofrece multivista adaptable y organiza las grabaciones disparadas por eventos ONVIF en una biblioteca con línea de tiempo.
+Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, permite agregarlos con credenciales, muestra previews y transmisiones en vivo, ofrece multivista adaptable, organiza grabaciones por eventos u horario y añade analítica local de personas sobre el archivo de vídeo.
 
 ## Características
 
@@ -29,6 +29,9 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Biblioteca de grabaciones por cámara con cantidad, espacio usado y duración aproximada.
 - Miniaturas JPEG de grabaciones y miniaturas de eventos; un evento asociado a un clip puede abrir la reproducción directamente en su segundo exacto.
 - Línea de tiempo de 24 horas filtrable por fecha.
+- Analítica local de personas con **NanoDet-Plus-m 320** sobre ONNX Runtime: muestreo base de 1 FPS, una sola inferencia a la vez y sin enviar vídeo a servicios externos.
+- Backfill automático de grabaciones cerradas y detección incremental durante grabaciones activas/programadas; los resultados se guardan en `data/analytics.db`.
+- Pista **Personas** bajo la línea de tiempo: cada tramo detectado es clicable y abre el MKV en el segundo de mayor confianza de esa detección.
 - Escritura Matroska con clusters cortos, flush frecuente y sincronización periódica a disco para reducir el daño ante una interrupción brusca.
 - Compresión H.264 en segundo plano al cerrar un clip; el original sólo se reemplaza atómicamente cuando el resultado es válido y realmente ahorra espacio.
 - Módulo **Integraciones > Telegram**: valida el token con Bot API, lo guarda cifrado, vincula chats con códigos de 4 dígitos de un solo uso válidos 10 minutos y permite eliminar por completo la integración.
@@ -45,21 +48,23 @@ cmd/onvif-visor/      ejecutable principal
 internal/onvif/       descubrimiento, perfiles, RTSP y Events/PullPoint
 internal/store/       persistencia de cámaras y cifrado AES-GCM de secretos
 internal/account/     SQLite embebido para usuarios, sesiones y estado Telegram
+internal/analytics/   NanoDet/ONNX Runtime, indexación 1 FPS y analytics.db
 internal/telegram/    cliente Bot API con long polling y envío de medios
 internal/media/       FFmpeg live, snapshots, grabación, clips y playback
-internal/server/      API HTTP, seguridad, sesiones, eventos e integraciones
+internal/server/      API HTTP, seguridad, sesiones, eventos, analítica e integraciones
 internal/service/     instalación en /opt y gestores systemd/OpenRC/runit/SysV
 web/                  HTML/CSS/JS embebidos con go:embed
 contexto/             bitácora Ponytail
 tareas/               tareas Ponytail
 ```
 
-El binario de la aplicación se compila con `CGO_ENABLED=0`, por lo que es estático. SQLite se enlaza como implementación pura Go (`modernc.org/sqlite`), sin servicio externo. FFmpeg es una dependencia de runtime independiente y se usa únicamente para medios: RTSP -> MJPEG, snapshots, escritura de grabaciones, clips Telegram y reproducción web. No se requiere Node.js, Python, PHP, nginx ni un servidor de base de datos.
+La compilación principal usa `CGO_ENABLED=1` porque la analítica carga ONNX Runtime mediante su librería compartida. SQLite sigue siendo una implementación pura Go (`modernc.org/sqlite`), sin servicio externo. FFmpeg se usa para medios y para extraer frames 320x320 a 1 FPS; NanoDet hace la inferencia en CPU dentro del proceso del visor. Existe un build estático opcional con `CGO_ENABLED=0`, pero en ese binario la analítica NanoDet queda deshabilitada de forma segura. No se requiere Node.js, Python, PHP, nginx ni un servidor de base de datos.
 
 ## Requisitos
 
 - Go 1.24 o superior para compilar. El proyecto fue validado con Go 1.27.1.
 - FFmpeg accesible en `PATH` o indicado con `-ffmpeg`.
+- ONNX Runtime 1.x disponible como `libonnxruntime.so`/`libonnxruntime.so.1` para habilitar NanoDet. En el servidor DexOS/Alpine validado: `apk add --no-cache onnxruntime`.
 - Cámara ONVIF accesible desde la misma red del host.
 - Para eventos nativos se usa ONVIF Events/PullPoint; si la cámara lo anuncia pero falla, el visor puede usar un detector local de movimiento sobre RTSP como respaldo.
 
@@ -79,12 +84,18 @@ dist/onvif-visor
 La compilación equivalente sin Make es:
 
 ```bash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/onvif-visor ./cmd/onvif-visor
+CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o dist/onvif-visor ./cmd/onvif-visor
+```
+
+Para generar además un binario estático sin inferencia NanoDet:
+
+```bash
+make build-static
 ```
 
 ## Instalar como servicio
 
-El instalador detecta automáticamente `systemd`, OpenRC, runit o SysV init, eleva privilegios con `sudo`, `doas` o `pkexec` cuando hace falta e instala el binario en `/opt/onvif-visor/onvif-visor`. En la primera instalación migra `data/` y `recordings/` desde `--source-dir` sólo si los destinos están vacíos; en actualizaciones nunca sobreescribe esos datos.
+El instalador detecta automáticamente `systemd`, OpenRC, runit o SysV init, eleva privilegios con `sudo`, `doas` o `pkexec` cuando hace falta e instala el binario en `/opt/onvif-visor/onvif-visor`. También materializa el modelo NanoDet embebido en `/opt/onvif-visor/models/`. En la primera instalación migra `data/` y `recordings/` desde `--source-dir` sólo si los destinos están vacíos; en actualizaciones nunca sobreescribe esos datos. ONNX Runtime sigue siendo una dependencia del sistema; el visor lo autodetecta en rutas estándar o puede persistirse una ruta personalizada con `-onnxruntime` durante `--install`.
 
 ```bash
 sudo ./dist/onvif-visor --install --listen 0.0.0.0:8081 --source-dir .
@@ -125,6 +136,8 @@ Por defecto se crean:
 data/master.key
 data/cameras.json
 data/accounts.db
+data/analytics.db
+data/models/nanodet-plus-m_320.onnx
 recordings/<camera-id>/*.mkv
 ```
 
@@ -153,8 +166,8 @@ Para una red no confiable se recomienda colocar TLS delante del servicio. El mod
 5. Usar **Detectar cámaras** o **Agregar cámara** para incorporar nuevos endpoints ONVIF.
 6. Activar **REC** en una tarjeta para grabar cuando haya movimiento/eventos.
 7. Usar el botón **◷** de la tarjeta para activar un horario, elegir días de la semana y definir hora inicial/final; los horarios que cruzan medianoche están soportados.
-8. Abrir **Grabaciones** para elegir una cámara, revisar sus clips, filtrar la fecha y usar la línea de tiempo.
-9. Pulsar una tarjeta o bloque de timeline para reproducir. El scrubber reinicia la reproducción desde el segundo seleccionado y el MKV original puede descargarse.
+8. Abrir **Grabaciones** para elegir una cámara, revisar sus clips, filtrar la fecha y usar la línea de tiempo. La pista **Personas** muestra los tramos que NanoDet va encontrando tanto en clips históricos como durante grabaciones activas.
+9. Pulsar una tarjeta, un bloque de grabación o un tramo de **Personas** para reproducir. Una detección de persona salta al segundo de mayor confianza del tramo; el scrubber permite buscar otro instante y el MKV original puede descargarse.
 10. Abrir **Eventos** para consultar movimiento y eventos recientes y saltar al instante de una grabación asociada.
 11. Abrir **Sesiones** para revisar accesos persistentes y cerrar todos los demás dispositivos sin perder la sesión actual.
 12. Abrir **Perfil** para cambiar el usuario o contraseña; la clave actual confirma la operación y una clave nueva cierra las demás sesiones.
@@ -195,6 +208,8 @@ La hora de inicio se obtiene del nombre que genera el grabador (`YYYYMMDD-HHMMSS
 
 El playback del navegador convierte el MKV almacenado a MJPEG a velocidad real. Permite seek por segundos, pausa/reanudación y hasta 4 reproducciones simultáneas. El playback web actual no incluye audio; la descarga entrega el MKV que quedó almacenado después de la optimización de espacio.
 
+La analítica usa el modelo oficial NanoDet-Plus-m 320 y únicamente consume la clase COCO `person`. El modelo y su licencia Apache-2.0 se conservan en `internal/analytics/assets/` y el instalador despliega ambos junto al servicio. Para clips cerrados, un único worker procesa frames a 1 FPS y guarda intervalos fusionados en `analytics.db`; la huella tamaño+mtime evita repetir archivos ya terminados. Durante una grabación activa se analiza el substream ligero cuando está disponible y se registra el offset contra el MKV que se está escribiendo, por lo que una grabación programada de varias horas puede mostrar detecciones antes de cerrarse. El botón **Reanalizar** marca la biblioteca como pendiente y el scanner la vuelve a recorrer por tandas sin duplicar trabajos ya en cola.
+
 ## Eventos que disparan grabación
 
 El visor reconoce tópicos/datos relacionados con:
@@ -222,6 +237,7 @@ Un chat vinculado puede usar `/camaras`, `/foto <camara>`, `/video <camara>` y `
 - El servicio escucha únicamente en loopback salvo que se solicite explícitamente LAN y exista al menos un usuario persistido; las credenciales bootstrap sólo son obligatorias para crear la primera cuenta.
 - Las contraseñas de usuarios se almacenan con bcrypt. La sesión usa un token aleatorio en cookie `HttpOnly`, `SameSite=Strict` y `Secure` cuando la petición entra por HTTPS; SQLite persiste únicamente el SHA-256 del token.
 - Los tokens de Telegram se validan antes de guardarse, se cifran con AES-256-GCM y no se devuelven a las APIs de configuración.
+- `analytics.db` se crea con permisos `0600`; sólo guarda metadatos de detección (archivo, segundos y confianza), no frames ni imágenes extraídas.
 - Las rutas de grabaciones validan que el archivo solicitado sea un basename `.mkv` dentro del directorio calculado de la cámara; se rechaza path traversal.
 - Los endpoints de snapshot, live, playback y descarga permanecen detrás de la misma sesión de UI.
 
@@ -238,7 +254,9 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 - La grabación usa Matroska (`.mkv`) y copia los codecs del origen. Si una cámara entrega un formato que FFmpeg no puede remuxear a MKV, la grabación fallará y requerirá una política específica.
 - Un clip todavía activo puede no ser reproducible hasta que FFmpeg cierre correctamente el contenedor MKV.
 - Si se elimina una cámara, sus grabaciones permanecen físicamente en disco pero dejan de aparecer en la biblioteca mientras esa cámara no esté configurada.
-- No se implementan todavía PTZ, analítica propia, nube ni detección por IA.
+- NanoDet trabaja a 1 FPS para mantener bajo el consumo de CPU; una aparición de menos de un segundo puede quedar entre muestras. La analítica actual sólo clasifica `person`: no hace reconocimiento facial, identidad, tracking persistente ni análisis en la nube.
+- Si `libonnxruntime` no está disponible, el visor sigue funcionando pero reporta la pista de personas como no disponible. El build estático `CGO_ENABLED=0` tiene el mismo comportamiento degradado.
+- No se implementan todavía PTZ ni nube.
 
 ## Flags
 
@@ -247,6 +265,8 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 -data-dir           directorio de configuración; default data
 -recordings-dir     directorio de grabaciones; default recordings
 -ffmpeg             ruta de ffmpeg; default ffmpeg
+-analytics-model    ruta opcional al modelo NanoDet ONNX; por defecto usa el embebido
+-onnxruntime        ruta opcional a libonnxruntime.so; también ONVIF_ONNXRUNTIME
 -ui-user            usuario bootstrap; también ONVIF_VISOR_USER
 -ui-password        contraseña bootstrap; también ONVIF_VISOR_PASSWORD
 -install            instalar/actualizar como servicio en /opt/onvif-visor
@@ -263,5 +283,6 @@ Antes de una entrega se deben ejecutar:
 gofmt -w cmd internal web
 go test ./...
 go vet ./...
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/onvif-visor ./cmd/onvif-visor
+CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o dist/onvif-visor ./cmd/onvif-visor
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/onvif-visor-static ./cmd/onvif-visor
 ```

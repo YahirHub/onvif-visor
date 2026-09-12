@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"onvif-visor/internal/account"
+	"onvif-visor/internal/analytics"
 	"onvif-visor/internal/media"
 	onvifsvc "onvif-visor/internal/onvif"
 	"onvif-visor/internal/store"
@@ -24,16 +25,18 @@ import (
 const uiSessionCookie = "onvif_viewer_session"
 
 type Config struct {
-	Store    *store.Store
-	Accounts *account.Store
-	Media    *media.Manager
-	Assets   fs.FS
+	Store     *store.Store
+	Accounts  *account.Store
+	Media     *media.Manager
+	Analytics *analytics.Manager
+	Assets    fs.FS
 }
 
 type App struct {
 	store       *store.Store
 	accounts    *account.Store
 	media       *media.Manager
+	analytics   *analytics.Manager
 	assets      fs.FS
 	authEnabled bool
 	mux         *http.ServeMux
@@ -83,7 +86,7 @@ func New(cfg Config) (*App, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	app := &App{
-		store: cfg.Store, accounts: cfg.Accounts, media: cfg.Media, assets: cfg.Assets,
+		store: cfg.Store, accounts: cfg.Accounts, media: cfg.Media, analytics: cfg.Analytics, assets: cfg.Assets,
 		authEnabled: hasUsers,
 		mux:         http.NewServeMux(), ctx: ctx, cancel: cancel,
 		watchers:             make(map[string]context.CancelFunc),
@@ -93,6 +96,7 @@ func New(cfg Config) (*App, error) {
 	}
 	app.routes()
 	app.startExistingWatchers()
+	app.startExistingAnalytics()
 	app.startScheduler()
 	app.startTelegramIntegration()
 	return app, nil
@@ -111,6 +115,9 @@ func (a *App) Close() {
 	}
 	a.watchers = make(map[string]context.CancelFunc)
 	a.watchMu.Unlock()
+	if a.analytics != nil {
+		_ = a.analytics.Close()
+	}
 	a.media.StopAll()
 }
 
@@ -137,6 +144,10 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/snapshot", a.handleRecordingSnapshot)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/play", a.handleRecordingPlayback)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/download", a.handleRecordingDownload)
+	a.mux.HandleFunc("GET /api/analytics/status", a.handleAnalyticsStatus)
+	a.mux.HandleFunc("GET /api/analytics/persons", a.handleAnalyticsPersons)
+	a.mux.HandleFunc("GET /api/analytics/recordings", a.handleAnalyticsRecordings)
+	a.mux.HandleFunc("POST /api/analytics/reindex", a.handleAnalyticsReindex)
 	a.mux.HandleFunc("GET /api/integrations/telegram", a.handleTelegramStatus)
 	a.mux.HandleFunc("PUT /api/integrations/telegram", a.handleTelegramSave)
 	a.mux.HandleFunc("DELETE /api/integrations/telegram", a.handleTelegramDelete)

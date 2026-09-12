@@ -18,6 +18,7 @@ func platformPaths() paths {
 		Binary:        filepath.Join(installDir, "onvif-visor"),
 		DataDir:       filepath.Join(installDir, "data"),
 		RecordingsDir: filepath.Join(installDir, "recordings"),
+		ModelsDir:     filepath.Join(installDir, "models"),
 		Metadata:      filepath.Join(installDir, "install.json"),
 		LogDir:        "/var/log/onvif-visor",
 	}
@@ -31,6 +32,7 @@ func preparePlatformDirs(p paths) error {
 		{p.InstallDir, 0o755},
 		{p.DataDir, 0o700},
 		{p.RecordingsDir, 0o700},
+		{p.ModelsDir, 0o755},
 		{p.LogDir, 0o700},
 	} {
 		if err := os.MkdirAll(item.path, item.mode); err != nil {
