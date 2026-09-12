@@ -16,7 +16,7 @@ Aplicación monobinaria Go con interfaz web embebida para descubrir cámaras ONV
 - Grabaciones: MKV con `-c copy`; un evento activo extiende el post-roll de una grabación existente.
 - Descubrimiento por WS-Discovery en interfaces activas con multicast, máximo 16.
 - Credenciales persistidas cifradas con AES-256-GCM; RTSP persistido sin userinfo.
-- Loopback por defecto. Cualquier bind no-loopback exige token.
+- Loopback por defecto. Cualquier bind no-loopback exige usuario/contraseña y login propio del frontend con sesión HttpOnly.
 
 # Implementación
 - `cmd/onvif-visor/main.go`: flags, bind seguro, shutdown.
@@ -33,7 +33,7 @@ Aplicación monobinaria Go con interfaz web embebida para descubrir cámaras ONV
 - Validación Lilith/code_validate completa correcta.
 - Opciones FFmpeg `mpjpeg` y `boundary_tag` verificadas en el FFmpeg instalado.
 - Smoke test: `/api/health` 200 y UI embebida servida correctamente.
-- Seguridad LAN: bind `0.0.0.0` sin token rechazado; con autenticación, API devuelve 401 antes de sesión y 200 después de token válido.
+- Seguridad LAN: bind `0.0.0.0` sin credenciales rechazado; la UI pública muestra login propio, las APIs devuelven 401 sin sesión y 200 después de iniciar sesión correctamente.
 - Build `CGO_ENABLED=0`; `ldd` informa `Not a valid dynamic program`.
 
 # Limitaciones verificadas/documentadas

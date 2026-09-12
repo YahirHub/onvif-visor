@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,19 +20,27 @@ import (
 	"onvif-visor/internal/store"
 )
 
+const (
+	uiSessionCookie = "onvif_viewer_session"
+	uiSessionMaxAge = 12 * 60 * 60
+)
+
 type Config struct {
-	Store   *store.Store
-	Media   *media.Manager
-	Assets  fs.FS
-	UIToken string
+	Store      *store.Store
+	Media      *media.Manager
+	Assets     fs.FS
+	UIUser     string
+	UIPassword string
 }
 
 type App struct {
-	store   *store.Store
-	media   *media.Manager
-	assets  fs.FS
-	uiToken string
-	mux     *http.ServeMux
+	store        *store.Store
+	media        *media.Manager
+	assets       fs.FS
+	uiUser       string
+	uiPassword   string
+	sessionToken string
+	mux          *http.ServeMux
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -56,9 +66,23 @@ func New(cfg Config) (*App, error) {
 	if cfg.Store == nil || cfg.Media == nil || cfg.Assets == nil {
 		return nil, errors.New("store, media and assets are required")
 	}
+	if (cfg.UIUser == "") != (cfg.UIPassword == "") {
+		return nil, errors.New("ui user and password must be configured together")
+	}
+
+	sessionToken := ""
+	if cfg.UIUser != "" {
+		var err error
+		sessionToken, err = newSessionToken()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	app := &App{
-		store: cfg.Store, media: cfg.Media, assets: cfg.Assets, uiToken: cfg.UIToken,
+		store: cfg.Store, media: cfg.Media, assets: cfg.Assets,
+		uiUser: cfg.UIUser, uiPassword: cfg.UIPassword, sessionToken: sessionToken,
 		mux: http.NewServeMux(), ctx: ctx, cancel: cancel,
 		watchers: make(map[string]context.CancelFunc),
 	}
@@ -84,7 +108,9 @@ func (a *App) Close() {
 
 func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/health", a.handleHealth)
-	a.mux.HandleFunc("POST /api/session", a.handleSession)
+	a.mux.HandleFunc("GET /api/session", a.handleSessionStatus)
+	a.mux.HandleFunc("POST /api/session", a.handleSessionLogin)
+	a.mux.HandleFunc("DELETE /api/session", a.handleSessionLogout)
 	a.mux.HandleFunc("POST /api/discover", a.handleDiscover)
 	a.mux.HandleFunc("GET /api/cameras", a.handleListCameras)
 	a.mux.HandleFunc("POST /api/cameras", a.handleAddCamera)
@@ -100,43 +126,96 @@ func (a *App) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ffmpeg": true})
 }
 
-func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
-	if a.uiToken == "" {
+func (a *App) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	required := a.authRequired()
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"required":      required,
+		"authenticated": !required || a.hasValidSession(r),
+	})
+}
+
+func (a *App) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
+	if !a.authRequired() {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+
 	var req struct {
-		Token string `json:"token"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
-	if err := decodeJSON(r, &req); err != nil || !constantEqual(req.Token, a.uiToken) {
-		writeError(w, http.StatusUnauthorized, "token inválido")
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "Completa usuario y contraseña.")
 		return
 	}
+	if !constantEqual(strings.TrimSpace(req.Username), a.uiUser) || !constantEqual(req.Password, a.uiPassword) {
+		writeError(w, http.StatusUnauthorized, "Usuario o contraseña incorrectos.")
+		return
+	}
+
+	expires := time.Now().Add(uiSessionMaxAge * time.Second)
 	http.SetCookie(w, &http.Cookie{
-		Name: "onvif_viewer_session", Value: a.uiToken, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 12 * 60 * 60,
+		Name:     uiSessionCookie,
+		Value:    a.sessionToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   uiSessionMaxAge,
+		Expires:  expires,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) handleSessionLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     uiSessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *App) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.uiToken == "" || r.URL.Path == "/api/health" || r.URL.Path == "/api/session" || !strings.HasPrefix(r.URL.Path, "/api/") {
+		if !a.authRequired() || r.URL.Path == "/api/health" || r.URL.Path == "/api/session" || !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-		if provided == "" {
-			if cookie, err := r.Cookie("onvif_viewer_session"); err == nil {
-				provided = cookie.Value
-			}
-		}
-		if !constantEqual(provided, a.uiToken) {
-			writeError(w, http.StatusUnauthorized, "autenticación requerida")
+		if !a.hasValidSession(r) {
+			writeError(w, http.StatusUnauthorized, "La sesión no es válida o expiró.")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (a *App) authRequired() bool {
+	return a.uiUser != "" && a.uiPassword != ""
+}
+
+func (a *App) hasValidSession(r *http.Request) bool {
+	if !a.authRequired() {
+		return true
+	}
+	cookie, err := r.Cookie(uiSessionCookie)
+	if err != nil {
+		return false
+	}
+	return constantEqual(cookie.Value, a.sessionToken)
+}
+
+func newSessionToken() (string, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", errors.New("generate UI session token: " + err.Error())
+	}
+	return base64.RawURLEncoding.EncodeToString(secret), nil
 }
 
 func (a *App) securityHeaders(next http.Handler) http.Handler {

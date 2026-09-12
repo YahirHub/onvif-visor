@@ -17,7 +17,7 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Post-roll configurable de 1 a 600 segundos.
 - Grabación con `-c copy` a MKV para evitar recodificación siempre que el stream sea compatible.
 - Servicio ligado a `127.0.0.1` por defecto.
-- Cuando se publica en LAN, exige token de acceso.
+- Cuando se publica en LAN, exige usuario y contraseña mediante un login propio del frontend y sesión HttpOnly.
 - Sin base de datos: configuración en archivos locales.
 
 ## Arquitectura
@@ -87,14 +87,15 @@ recordings/<camera-id>/*.mkv
 
 ## Publicar en la LAN
 
-No se permite escuchar fuera de loopback sin token. Ejemplo:
+No se permite escuchar fuera de loopback sin usuario y contraseña. Ejemplo:
 
 ```bash
-ONVIF_VISOR_TOKEN='cambia-esto-por-un-token-largo' \
+ONVIF_VISOR_USER='operador' \
+ONVIF_VISOR_PASSWORD='cambia-esto-por-una-clave-larga' \
   ./dist/onvif-visor -listen 0.0.0.0:8080
 ```
 
-La interfaz solicitará el token al primer acceso a la API y lo guardará en una cookie `HttpOnly` de la sesión local del navegador.
+La propia interfaz muestra una pantalla de login. Al validar las credenciales, el servidor crea una cookie de sesión `HttpOnly` y `SameSite=Strict`; no se usan diálogos HTTP Basic, `window.prompt` ni credenciales incrustadas en URLs.
 
 Para una red no confiable se recomienda colocar TLS delante del servicio. El modo LAN integrado usa HTTP y está pensado para una LAN privada/controlada.
 
@@ -137,7 +138,7 @@ Cuando un evento incluye un estado explícito `false`, `off`, `inactive`, `idle`
 - El archivo `master.key` se crea con permisos `0600` y el directorio de datos con `0700`.
 - El URI RTSP guardado no contiene credenciales.
 - La salida de FFmpeg se descarta para evitar que errores puedan terminar registrando un URI RTSP sensible.
-- El servicio escucha únicamente en loopback salvo que se solicite explícitamente LAN y se configure un token.
+- El servicio escucha únicamente en loopback salvo que se solicite explícitamente LAN y se configuren usuario y contraseña.
 
 Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determinadas cámaras. En este MVP se entregan a FFmpeg únicamente en memoria al lanzar el proceso; no se escriben en los archivos de configuración ni en los logs del visor. En hosts multiusuario, los argumentos de procesos pueden ser visibles para usuarios con privilegios suficientes; por ello se recomienda ejecutar el visor con una cuenta de servicio dedicada.
 
@@ -157,7 +158,8 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 -data-dir           directorio de configuración; default data
 -recordings-dir     directorio de grabaciones; default recordings
 -ffmpeg             ruta de ffmpeg; default ffmpeg
--ui-token           token para modo LAN; también ONVIF_VISOR_TOKEN
+-ui-user            usuario para modo LAN; también ONVIF_VISOR_USER
+-ui-password        contraseña para modo LAN; también ONVIF_VISOR_PASSWORD
 ```
 
 ## Validación del proyecto

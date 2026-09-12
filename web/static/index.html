@@ -7,52 +7,86 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">VISOR LOCAL</p>
-      <h1>ONVIF Visor</h1>
-      <p class="subtitle">Cámaras en vivo, descubrimiento y grabación por eventos.</p>
+  <section id="bootView" class="auth-shell" aria-live="polite">
+    <div class="auth-card compact-card">
+      <div class="brand-mark" aria-hidden="true">OV</div>
+      <p class="eyebrow">ONVIF VISOR</p>
+      <h1 class="auth-title">Conectando al visor</h1>
+      <p id="bootStatus" class="auth-copy">Preparando la interfaz…</p>
+      <div id="bootSpinner" class="spinner" aria-hidden="true"></div>
+      <button id="bootRetryBtn" class="secondary full-button" type="button" hidden>Reintentar</button>
     </div>
-    <div class="actions">
-      <button id="discoverBtn" class="secondary">Detectar cámaras</button>
-      <button id="addBtn">Agregar cámara</button>
-    </div>
-  </header>
+  </section>
 
-  <main>
-    <section class="statusbar" aria-live="polite">
-      <span id="healthDot" class="dot"></span>
-      <span id="statusText">Conectando…</span>
-      <span class="spacer"></span>
-      <button id="refreshBtn" class="linkbutton">Actualizar</button>
-    </section>
+  <section id="loginView" class="auth-shell" hidden>
+    <form id="loginForm" class="auth-card" novalidate>
+      <div class="brand-mark" aria-hidden="true">OV</div>
+      <p class="eyebrow">ACCESO SEGURO</p>
+      <h1 class="auth-title">Iniciar sesión</h1>
+      <p class="auth-copy">Ingresa las credenciales configuradas para este visor.</p>
 
-    <section>
-      <div class="section-title">
-        <div>
-          <p class="eyebrow">MONITOREO</p>
-          <h2>Cámaras</h2>
+      <label>Usuario
+        <input id="loginUsername" name="username" autocomplete="username" required autofocus>
+      </label>
+      <label>Contraseña
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+      </label>
+
+      <p id="loginMessage" class="form-message" role="status" aria-live="polite"></p>
+      <div id="loginError" class="form-error" role="alert" aria-live="assertive"></div>
+      <button id="loginSubmitBtn" class="full-button" type="submit">Entrar al visor</button>
+    </form>
+  </section>
+
+  <div id="appView" hidden>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">VISOR LOCAL</p>
+        <h1>ONVIF Visor</h1>
+        <p class="subtitle">Cámaras en vivo, descubrimiento y grabación por eventos.</p>
+      </div>
+      <div class="actions">
+        <button id="discoverBtn" class="secondary">Detectar cámaras</button>
+        <button id="addBtn">Agregar cámara</button>
+        <button id="logoutBtn" class="secondary" hidden>Cerrar sesión</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="statusbar" aria-live="polite">
+        <span id="healthDot" class="dot"></span>
+        <span id="statusText">Conectando…</span>
+        <span class="spacer"></span>
+        <button id="refreshBtn" class="linkbutton">Actualizar</button>
+      </section>
+
+      <section>
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">MONITOREO</p>
+            <h2>Cámaras</h2>
+          </div>
+          <span id="cameraCount" class="pill">0</span>
         </div>
-        <span id="cameraCount" class="pill">0</span>
-      </div>
-      <div id="cameraGrid" class="camera-grid"></div>
-      <div id="emptyState" class="empty">
-        <h3>No hay cámaras agregadas</h3>
-        <p>Usa “Detectar cámaras” para buscar dispositivos ONVIF en la red o agrégala manualmente.</p>
-      </div>
-    </section>
-
-    <section class="events-section">
-      <div class="section-title">
-        <div>
-          <p class="eyebrow">ACTIVIDAD</p>
-          <h2>Eventos recientes</h2>
+        <div id="cameraGrid" class="camera-grid"></div>
+        <div id="emptyState" class="empty">
+          <h3>No hay cámaras agregadas</h3>
+          <p>Usa “Detectar cámaras” para buscar dispositivos ONVIF en la red o agrégala manualmente.</p>
         </div>
-        <button id="eventsRefreshBtn" class="linkbutton">Actualizar</button>
-      </div>
-      <div id="eventsList" class="events-list"></div>
-    </section>
-  </main>
+      </section>
+
+      <section class="events-section">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">ACTIVIDAD</p>
+            <h2>Eventos recientes</h2>
+          </div>
+          <button id="eventsRefreshBtn" class="linkbutton">Actualizar</button>
+        </div>
+        <div id="eventsList" class="events-list"></div>
+      </section>
+    </main>
+  </div>
 
   <dialog id="cameraDialog">
     <form id="cameraForm" method="dialog">
@@ -99,6 +133,23 @@
     <div class="dialog-actions">
       <button type="button" class="secondary" data-close="discoveryDialog">Cerrar</button>
     </div>
+  </dialog>
+
+  <dialog id="confirmDialog" class="confirm-dialog">
+    <form method="dialog">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">CONFIRMACIÓN</p>
+          <h2 id="confirmTitle">Confirmar acción</h2>
+        </div>
+        <button type="submit" value="cancel" class="iconbutton" aria-label="Cerrar">×</button>
+      </div>
+      <p id="confirmMessage" class="confirm-copy"></p>
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="secondary">Cancelar</button>
+        <button id="confirmAcceptBtn" type="submit" value="confirm" class="danger-solid">Confirmar</button>
+      </div>
+    </form>
   </dialog>
 
   <template id="cameraTemplate">

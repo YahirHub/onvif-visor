@@ -11,7 +11,7 @@ Construir un visor local de cámaras ONVIF, escrito en Go, con descubrimiento, a
 - Mantener la metodología Ponytail: mínima complejidad, sin capas vacías ni dependencias innecesarias.
 - No guardar contraseñas de cámaras en texto plano. Cifrar secretos persistidos.
 - No registrar contraseñas, URIs RTSP con credenciales ni tokens.
-- El servicio debe escuchar solo en loopback por defecto. Si se expone a LAN, requerir token de UI.
+- El servicio debe escuchar solo en loopback por defecto. Si se expone a LAN, requerir login propio de frontend con usuario/contraseña y sesión HttpOnly; no usar diálogos HTTP Basic ni mensajes crudos del servidor.
 - Toda entrada de red debe tener timeouts y límites.
 - No asumir compatibilidad total con cámaras no conformantes; degradar funcionalidad y reportar errores claros.
 

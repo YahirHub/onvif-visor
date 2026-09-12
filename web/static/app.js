@@ -1,11 +1,25 @@
 const state = {
   cameras: [],
   live: new Set(),
+  auth: { required: false, authenticated: false },
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+const bootView = $('#bootView');
+const bootStatus = $('#bootStatus');
+const bootSpinner = $('#bootSpinner');
+const bootRetryBtn = $('#bootRetryBtn');
+const loginView = $('#loginView');
+const loginForm = $('#loginForm');
+const loginUsername = $('#loginUsername');
+const loginPassword = $('#loginPassword');
+const loginMessage = $('#loginMessage');
+const loginError = $('#loginError');
+const loginSubmitBtn = $('#loginSubmitBtn');
+const appView = $('#appView');
+const logoutBtn = $('#logoutBtn');
 const cameraGrid = $('#cameraGrid');
 const emptyState = $('#emptyState');
 const cameraCount = $('#cameraCount');
@@ -13,36 +27,195 @@ const statusText = $('#statusText');
 const healthDot = $('#healthDot');
 const cameraDialog = $('#cameraDialog');
 const discoveryDialog = $('#discoveryDialog');
+const confirmDialog = $('#confirmDialog');
 
-async function api(path, options = {}, retryAuth = true) {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
-  if (response.status === 401 && retryAuth) {
-    const token = window.prompt('Este visor requiere un token de acceso:');
-    if (!token) throw new Error('Autenticación cancelada');
-    const session = await fetch('/api/session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    });
-    if (!session.ok) throw new Error('Token inválido');
-    return api(path, options, false);
-  }
-  if (!response.ok) {
-    let message = `Error HTTP ${response.status}`;
-    try {
-      const payload = await response.json();
-      if (payload.error) message = payload.error;
-    } catch (_) {}
-    throw new Error(message);
-  }
+let eventsTimer = null;
+
+class SessionRequiredError extends Error {}
+
+async function readResponsePayload(response) {
   if (response.status === 204) return null;
-  return response.json();
+  try {
+    return await response.json();
+  } catch (_) {
+    return null;
+  }
 }
+
+function responseMessage(response, payload) {
+  if (payload?.error) return payload.error;
+  if (response.status === 400) return 'Revisa los datos e inténtalo de nuevo.';
+  if (response.status === 401) return 'La sesión no es válida. Ingresa de nuevo.';
+  if (response.status === 404) return 'No se encontró el recurso solicitado.';
+  if (response.status >= 500) return 'El visor no pudo completar la operación.';
+  return 'No se pudo completar la operación.';
+}
+
+async function fetchJSON(path, options = {}) {
+  const headers = { Accept: 'application/json', ...(options.headers || {}) };
+  if (options.body !== undefined && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  let response;
+  try {
+    response = await fetch(path, {
+      credentials: 'same-origin',
+      ...options,
+      headers,
+    });
+  } catch (_) {
+    throw new Error('No se pudo conectar con el visor. Revisa la red y vuelve a intentar.');
+  }
+
+  const payload = await readResponsePayload(response);
+  return { response, payload };
+}
+
+async function api(path, options = {}) {
+  const { response, payload } = await fetchJSON(path, options);
+  if (response.status === 401) {
+    showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
+    throw new SessionRequiredError('Sesión requerida');
+  }
+  if (!response.ok) throw new Error(responseMessage(response, payload));
+  return payload;
+}
+
+async function getSessionStatus() {
+  const { response, payload } = await fetchJSON('/api/session');
+  if (!response.ok || !payload) {
+    throw new Error(responseMessage(response, payload));
+  }
+  return payload;
+}
+
+function closeDialogs() {
+  for (const dialog of $$('dialog[open]')) dialog.close('cancel');
+}
+
+function stopLiveImages() {
+  for (const image of $$('.live-image')) image.removeAttribute('src');
+  state.live.clear();
+}
+
+function stopEventPolling() {
+  if (eventsTimer !== null) {
+    clearInterval(eventsTimer);
+    eventsTimer = null;
+  }
+}
+
+function startEventPolling() {
+  stopEventPolling();
+  eventsTimer = setInterval(refreshEvents, 10000);
+}
+
+function showLogin(message = '') {
+  closeDialogs();
+  stopLiveImages();
+  stopEventPolling();
+  if (state.auth.required) state.auth.authenticated = false;
+  bootView.hidden = true;
+  appView.hidden = true;
+  loginView.hidden = false;
+  loginError.textContent = '';
+  loginMessage.textContent = message;
+  loginPassword.value = '';
+  requestAnimationFrame(() => loginUsername.focus());
+}
+
+function showApp() {
+  bootView.hidden = true;
+  loginView.hidden = true;
+  appView.hidden = false;
+  logoutBtn.hidden = !state.auth.required;
+  loginError.textContent = '';
+  loginMessage.textContent = '';
+  startEventPolling();
+}
+
+function showBootError(message) {
+  bootView.hidden = false;
+  loginView.hidden = true;
+  appView.hidden = true;
+  bootStatus.textContent = message;
+  bootSpinner.hidden = true;
+  bootRetryBtn.hidden = false;
+}
+
+async function bootstrap() {
+  stopEventPolling();
+  bootView.hidden = false;
+  loginView.hidden = true;
+  appView.hidden = true;
+  bootStatus.textContent = 'Preparando la interfaz…';
+  bootSpinner.hidden = false;
+  bootRetryBtn.hidden = true;
+
+  try {
+    state.auth = await getSessionStatus();
+    if (state.auth.required && !state.auth.authenticated) {
+      showLogin();
+      return;
+    }
+    showApp();
+    await refreshAll();
+  } catch (error) {
+    showBootError(error.message);
+  }
+}
+
+loginForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const username = loginUsername.value.trim();
+  const password = loginPassword.value;
+
+  loginError.textContent = '';
+  loginMessage.textContent = '';
+  if (!username || !password) {
+    loginError.textContent = 'Escribe tu usuario y contraseña.';
+    return;
+  }
+
+  loginSubmitBtn.disabled = true;
+  const previousLabel = loginSubmitBtn.textContent;
+  loginSubmitBtn.textContent = 'Ingresando…';
+
+  try {
+    const { response, payload } = await fetchJSON('/api/session', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) {
+      loginError.textContent = responseMessage(response, payload);
+      return;
+    }
+
+    state.auth = { required: true, authenticated: true };
+    loginForm.reset();
+    showApp();
+    await refreshAll();
+  } catch (error) {
+    loginError.textContent = error.message;
+  } finally {
+    loginSubmitBtn.disabled = false;
+    loginSubmitBtn.textContent = previousLabel;
+  }
+});
+
+logoutBtn.addEventListener('click', async () => {
+  logoutBtn.disabled = true;
+  try {
+    await fetchJSON('/api/session', { method: 'DELETE' });
+  } finally {
+    logoutBtn.disabled = false;
+    state.auth.authenticated = false;
+    showLogin('Sesión cerrada correctamente.');
+  }
+});
+
+bootRetryBtn.addEventListener('click', bootstrap);
 
 function setStatus(message, ok = true) {
   statusText.textContent = message;
@@ -52,13 +225,26 @@ function setStatus(message, ok = true) {
 
 async function refreshAll() {
   try {
-    const [cameras] = await Promise.all([
-      api('/api/cameras'),
-      refreshEvents(),
-    ]);
+    const cameras = await api('/api/cameras');
     state.cameras = cameras || [];
     renderCameras();
-    setStatus('Servicio activo · FFmpeg disponible', true);
+    await refreshEvents();
+    if (!appView.hidden) setStatus('Servicio activo · FFmpeg disponible', true);
+  } catch (error) {
+    if (error instanceof SessionRequiredError) return;
+    setStatus(error.message, false);
+  }
+}
+
+async function checkSessionAfterMediaError(cameraName) {
+  try {
+    const session = await getSessionStatus();
+    state.auth = session;
+    if (session.required && !session.authenticated) {
+      showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
+      return;
+    }
+    setStatus(`No se pudo abrir el vídeo de ${cameraName}`, false);
   } catch (error) {
     setStatus(error.message, false);
   }
@@ -91,8 +277,7 @@ function renderCameras() {
     postRoll.disabled = !camera.events_supported;
 
     const startLive = () => {
-      const separator = camera.id.includes('?') ? '&' : '?';
-      image.src = `/api/cameras/${encodeURIComponent(camera.id)}/live${separator}t=${Date.now()}`;
+      image.src = `/api/cameras/${encodeURIComponent(camera.id)}/live?t=${Date.now()}`;
       image.hidden = false;
       placeholder.hidden = true;
       startButton.hidden = true;
@@ -110,9 +295,9 @@ function renderCameras() {
 
     startButton.addEventListener('click', startLive);
     stopButton.addEventListener('click', stopLive);
-    image.addEventListener('error', () => {
+    image.addEventListener('error', async () => {
       stopLive();
-      setStatus(`No se pudo abrir el vídeo de ${camera.name}`, false);
+      await checkSessionAfterMediaError(camera.name);
     });
 
     async function saveRecordingSettings() {
@@ -123,9 +308,13 @@ function renderCameras() {
           method: 'PUT',
           body: JSON.stringify({ enabled: toggle.checked, post_roll_seconds: seconds }),
         });
+        camera.event_recording = toggle.checked;
+        camera.post_roll_seconds = seconds;
         setStatus(`Configuración de ${camera.name} actualizada`, true);
       } catch (error) {
-        toggle.checked = !toggle.checked;
+        if (error instanceof SessionRequiredError) return;
+        toggle.checked = Boolean(camera.event_recording);
+        postRoll.value = String(camera.post_roll_seconds || 20);
         setStatus(error.message, false);
       }
     }
@@ -133,13 +322,22 @@ function renderCameras() {
     postRoll.addEventListener('change', saveRecordingSettings);
 
     deleteButton.addEventListener('click', async () => {
-      if (!window.confirm(`¿Eliminar ${camera.name}?`)) return;
+      const accepted = await confirmAction({
+        title: `Eliminar ${camera.name}`,
+        message: 'Esta cámara dejará de aparecer en el visor y se detendrá cualquier vista en vivo activa. Esta acción no elimina grabaciones existentes.',
+        confirmLabel: 'Eliminar cámara',
+      });
+      if (!accepted) return;
+
+      deleteButton.disabled = true;
       try {
         await api(`/api/cameras/${encodeURIComponent(camera.id)}`, { method: 'DELETE' });
         state.live.delete(camera.id);
         await refreshAll();
       } catch (error) {
-        setStatus(error.message, false);
+        if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+      } finally {
+        deleteButton.disabled = false;
       }
     });
 
@@ -153,9 +351,8 @@ async function refreshEvents() {
     const events = await api('/api/events');
     renderEvents(events || []);
   } catch (error) {
-    if (!String(error.message).includes('Autenticación cancelada')) {
-      setStatus(error.message, false);
-    }
+    if (error instanceof SessionRequiredError) return;
+    if (!appView.hidden) setStatus(error.message, false);
   }
 }
 
@@ -237,10 +434,24 @@ async function discover() {
       list.append(item);
     }
   } catch (error) {
-    status.textContent = error.message;
+    if (!(error instanceof SessionRequiredError)) status.textContent = error.message;
   } finally {
     button.disabled = false;
   }
+}
+
+function confirmAction({ title, message, confirmLabel = 'Confirmar' }) {
+  $('#confirmTitle').textContent = title;
+  $('#confirmMessage').textContent = message;
+  $('#confirmAcceptBtn').textContent = confirmLabel;
+  confirmDialog.returnValue = 'cancel';
+  confirmDialog.showModal();
+
+  return new Promise((resolve) => {
+    confirmDialog.addEventListener('close', () => {
+      resolve(confirmDialog.returnValue === 'confirm');
+    }, { once: true });
+  });
 }
 
 $('#cameraForm').addEventListener('submit', async (event) => {
@@ -263,7 +474,7 @@ $('#cameraForm').addEventListener('submit', async (event) => {
     $('#cameraForm').reset();
     await refreshAll();
   } catch (error) {
-    errorBox.textContent = error.message;
+    if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
   } finally {
     saveButton.disabled = false;
   }
@@ -277,13 +488,10 @@ $('#eventsRefreshBtn').addEventListener('click', refreshEvents);
 for (const button of $$('[data-close]')) {
   button.addEventListener('click', () => {
     const dialog = document.getElementById(button.dataset.close);
-    if (dialog?.open) dialog.close();
+    if (dialog?.open) dialog.close('cancel');
   });
 }
 
-window.addEventListener('beforeunload', () => {
-  for (const image of $$('.live-image')) image.removeAttribute('src');
-});
+window.addEventListener('beforeunload', stopLiveImages);
 
-refreshAll();
-setInterval(refreshEvents, 10000);
+bootstrap();
