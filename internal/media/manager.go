@@ -15,9 +15,10 @@ type Manager struct {
 	ffmpeg        string
 	recordingsDir string
 
-	mu          sync.Mutex
-	liveViewers map[string]int
-	recorders   map[string]*recording
+	mu              sync.Mutex
+	liveViewers     map[string]int
+	playbackViewers int
+	recorders       map[string]*recording
 }
 
 type RecordingStatus struct {

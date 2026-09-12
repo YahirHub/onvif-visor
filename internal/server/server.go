@@ -117,8 +117,12 @@ func (a *App) routes() {
 	a.mux.HandleFunc("DELETE /api/cameras/{id}", a.handleDeleteCamera)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/recording", a.handleRecordingSettings)
 	a.mux.HandleFunc("GET /api/cameras/{id}/live", a.handleLive)
+	a.mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.handleSnapshot)
 	a.mux.HandleFunc("GET /api/events", a.handleEvents)
 	a.mux.HandleFunc("GET /api/recordings", a.handleRecordings)
+	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/snapshot", a.handleRecordingSnapshot)
+	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/play", a.handleRecordingPlayback)
+	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/download", a.handleRecordingDownload)
 	a.mux.Handle("GET /", http.FileServer(http.FS(a.assets)))
 }
 

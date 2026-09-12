@@ -2,7 +2,9 @@ package server
 
 import (
 	"errors"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,6 +150,30 @@ func (a *App) handleLive(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cam, err := a.store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	streamURI, err := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "stream RTSP inválido")
+		return
+	}
+	image, err := a.media.Snapshot(r.Context(), streamURI)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "no se pudo obtener una vista previa de la cámara")
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=10")
+	w.Header().Set("Content-Length", strconv.Itoa(len(image)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image)
+}
+
 func (a *App) handleEvents(w http.ResponseWriter, _ *http.Request) {
 	a.eventsMu.Lock()
 	out := append([]CameraEvent(nil), a.events...)
@@ -155,8 +181,100 @@ func (a *App) handleEvents(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (a *App) handleRecordings(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, a.media.AllStatus())
+func (a *App) handleRecordings(w http.ResponseWriter, r *http.Request) {
+	cameraID := strings.TrimSpace(r.URL.Query().Get("camera_id"))
+	cameras := a.store.List()
+	out := make([]media.RecordingFile, 0)
+	found := cameraID == ""
+	for _, cam := range cameras {
+		if cameraID != "" && cam.ID != cameraID {
+			continue
+		}
+		found = true
+		files, err := a.media.ListRecordings(cam.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "no se pudo consultar el almacenamiento de grabaciones")
+			return
+		}
+		out = append(out, files...)
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) handleRecordingSnapshot(w http.ResponseWriter, r *http.Request) {
+	cameraID, name := r.PathValue("cameraID"), r.PathValue("name")
+	if _, err := a.store.Get(cameraID); err != nil {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	image, err := a.media.RecordingSnapshot(r.Context(), cameraID, name)
+	if err != nil {
+		if errors.Is(err, media.ErrRecordingNotFound) {
+			writeError(w, http.StatusNotFound, "grabación no encontrada")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "no se pudo generar la miniatura de la grabación")
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Content-Length", strconv.Itoa(len(image)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image)
+}
+
+func (a *App) handleRecordingPlayback(w http.ResponseWriter, r *http.Request) {
+	cameraID, name := r.PathValue("cameraID"), r.PathValue("name")
+	if _, err := a.store.Get(cameraID); err != nil {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	start := 0.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("start")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || parsed < 0 || parsed > 86400 {
+			writeError(w, http.StatusBadRequest, "posición de reproducción inválida")
+			return
+		}
+		start = parsed
+	}
+	if err := a.media.Playback(w, r, cameraID, name, start); err != nil {
+		switch {
+		case errors.Is(err, media.ErrRecordingNotFound):
+			writeError(w, http.StatusNotFound, "grabación no encontrada")
+		case errors.Is(err, media.ErrTooManyPlayback):
+			writeError(w, http.StatusTooManyRequests, "hay demasiadas reproducciones simultáneas")
+		default:
+			if r.Context().Err() == nil {
+				logCameraError(cameraID, "recording-playback", errors.New("ffmpeg recording playback ended"))
+			}
+		}
+	}
+}
+
+func (a *App) handleRecordingDownload(w http.ResponseWriter, r *http.Request) {
+	cameraID, name := r.PathValue("cameraID"), r.PathValue("name")
+	if _, err := a.store.Get(cameraID); err != nil {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	path, err := a.media.RecordingPath(cameraID, name)
+	if err != nil {
+		if errors.Is(err, media.ErrRecordingNotFound) {
+			writeError(w, http.StatusNotFound, "grabación no encontrada")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "no se pudo abrir la grabación")
+		return
+	}
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	w.Header().Set("Content-Type", "video/x-matroska")
+	w.Header().Set("Cache-Control", "private, no-store")
+	http.ServeFile(w, r, path)
 }
 
 func triggerDuration(cam store.Camera) time.Duration {

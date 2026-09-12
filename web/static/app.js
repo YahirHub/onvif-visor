@@ -1,7 +1,13 @@
 const state = {
   cameras: [],
-  live: new Set(),
+  recordings: [],
   auth: { required: false, authenticated: false },
+  currentView: 'cameras',
+  monitorSelected: [],
+  recordingCameraID: '',
+  recordingDate: '',
+  snapshotRevision: Date.now(),
+  playback: { recording: null, offset: 0, startedAt: 0, timer: null, playing: false },
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -20,14 +26,47 @@ const loginError = $('#loginError');
 const loginSubmitBtn = $('#loginSubmitBtn');
 const appView = $('#appView');
 const logoutBtn = $('#logoutBtn');
+const sidebarDot = $('#sidebarDot');
+const sidebarStatus = $('#sidebarStatus');
+const viewEyebrow = $('#viewEyebrow');
+const viewTitle = $('#viewTitle');
+const viewSubtitle = $('#viewSubtitle');
+const headerActions = $('#headerActions');
 const cameraGrid = $('#cameraGrid');
 const emptyState = $('#emptyState');
 const cameraCount = $('#cameraCount');
-const statusText = $('#statusText');
-const healthDot = $('#healthDot');
+const cameraSearch = $('#cameraSearch');
 const cameraDialog = $('#cameraDialog');
 const discoveryDialog = $('#discoveryDialog');
 const confirmDialog = $('#confirmDialog');
+const monitorStage = $('#monitorStage');
+const monitorEmpty = $('#monitorEmpty');
+const monitorPicker = $('#monitorPicker');
+const pickerList = $('#pickerList');
+const pickerSearch = $('#pickerSearch');
+
+const viewMeta = {
+  cameras: {
+    eyebrow: 'MONITOREO',
+    title: 'Cámaras',
+    subtitle: 'Selecciona una cámara para abrir su transmisión en tiempo real.',
+  },
+  monitor: {
+    eyebrow: 'CENTRO DE MONITOREO',
+    title: 'Vista en vivo',
+    subtitle: 'Combina hasta 9 cámaras en un layout que se adapta automáticamente.',
+  },
+  recordings: {
+    eyebrow: 'ALMACENAMIENTO',
+    title: 'Grabaciones',
+    subtitle: 'Consulta el historial de vídeo almacenado por cámara.',
+  },
+  events: {
+    eyebrow: 'ACTIVIDAD',
+    title: 'Eventos',
+    subtitle: 'Revisa eventos ONVIF y disparadores de grabación recientes.',
+  },
+};
 
 let eventsTimer = null;
 
@@ -35,11 +74,7 @@ class SessionRequiredError extends Error {}
 
 async function readResponsePayload(response) {
   if (response.status === 204) return null;
-  try {
-    return await response.json();
-  } catch (_) {
-    return null;
-  }
+  try { return await response.json(); } catch (_) { return null; }
 }
 
 function responseMessage(response, payload) {
@@ -47,27 +82,21 @@ function responseMessage(response, payload) {
   if (response.status === 400) return 'Revisa los datos e inténtalo de nuevo.';
   if (response.status === 401) return 'La sesión no es válida. Ingresa de nuevo.';
   if (response.status === 404) return 'No se encontró el recurso solicitado.';
+  if (response.status === 409) return 'La operación entra en conflicto con el estado actual.';
   if (response.status >= 500) return 'El visor no pudo completar la operación.';
   return 'No se pudo completar la operación.';
 }
 
 async function fetchJSON(path, options = {}) {
   const headers = { Accept: 'application/json', ...(options.headers || {}) };
-  if (options.body !== undefined && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
-  }
+  if (options.body !== undefined && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
 
   let response;
   try {
-    response = await fetch(path, {
-      credentials: 'same-origin',
-      ...options,
-      headers,
-    });
+    response = await fetch(path, { credentials: 'same-origin', ...options, headers });
   } catch (_) {
     throw new Error('No se pudo conectar con el visor. Revisa la red y vuelve a intentar.');
   }
-
   const payload = await readResponsePayload(response);
   return { response, payload };
 }
@@ -84,9 +113,7 @@ async function api(path, options = {}) {
 
 async function getSessionStatus() {
   const { response, payload } = await fetchJSON('/api/session');
-  if (!response.ok || !payload) {
-    throw new Error(responseMessage(response, payload));
-  }
+  if (!response.ok || !payload) throw new Error(responseMessage(response, payload));
   return payload;
 }
 
@@ -94,9 +121,8 @@ function closeDialogs() {
   for (const dialog of $$('dialog[open]')) dialog.close('cancel');
 }
 
-function stopLiveImages() {
-  for (const image of $$('.live-image')) image.removeAttribute('src');
-  state.live.clear();
+function stopMonitorStreams() {
+  for (const image of $$('.monitor-live-image', monitorStage)) image.removeAttribute('src');
 }
 
 function stopEventPolling() {
@@ -108,12 +134,20 @@ function stopEventPolling() {
 
 function startEventPolling() {
   stopEventPolling();
-  eventsTimer = setInterval(refreshEvents, 10000);
+  eventsTimer = setInterval(() => {
+    if (!appView.hidden && state.auth.authenticated !== false) refreshEvents(false);
+  }, 10000);
+}
+
+function setStatus(message, ok = true) {
+  sidebarStatus.textContent = message;
+  sidebarDot.classList.toggle('ok', ok);
+  sidebarDot.classList.toggle('bad', !ok);
 }
 
 function showLogin(message = '') {
   closeDialogs();
-  stopLiveImages();
+  stopMonitorStreams();
   stopEventPolling();
   if (state.auth.required) state.auth.authenticated = false;
   bootView.hidden = true;
@@ -130,6 +164,7 @@ function showApp() {
   loginView.hidden = true;
   appView.hidden = false;
   logoutBtn.hidden = !state.auth.required;
+  $('#logoutMobileBtn').hidden = !state.auth.required;
   loginError.textContent = '';
   loginMessage.textContent = '';
   startEventPolling();
@@ -161,16 +196,40 @@ async function bootstrap() {
     }
     showApp();
     await refreshAll();
+    navigate('cameras');
   } catch (error) {
     showBootError(error.message);
   }
+}
+
+function navigate(view) {
+  if (!viewMeta[view]) return;
+  if (state.currentView === 'monitor' && view !== 'monitor') stopMonitorStreams();
+  if (state.currentView === 'recordings' && view !== 'recordings') stopRecordingPlayback();
+  state.currentView = view;
+
+  for (const item of $$('.nav-item[data-view]')) item.classList.toggle('active', item.dataset.view === view);
+  for (const section of $$('.app-view')) section.hidden = section.id !== `${view}View`;
+
+  const meta = viewMeta[view];
+  viewEyebrow.textContent = meta.eyebrow;
+  viewTitle.textContent = meta.title;
+  viewSubtitle.textContent = meta.subtitle;
+  headerActions.hidden = view !== 'cameras';
+
+  if (view === 'cameras') renderCameras();
+  if (view === 'monitor') {
+    if (!state.monitorSelected.length && state.cameras.length) state.monitorSelected = [state.cameras[0].id];
+    renderMonitor();
+  }
+  if (view === 'recordings') loadRecordings();
+  if (view === 'events') refreshEvents(false);
 }
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const username = loginUsername.value.trim();
   const password = loginPassword.value;
-
   loginError.textContent = '';
   loginMessage.textContent = '';
   if (!username || !password) {
@@ -181,7 +240,6 @@ loginForm.addEventListener('submit', async (event) => {
   loginSubmitBtn.disabled = true;
   const previousLabel = loginSubmitBtn.textContent;
   loginSubmitBtn.textContent = 'Ingresando…';
-
   try {
     const { response, payload } = await fetchJSON('/api/session', {
       method: 'POST',
@@ -191,11 +249,11 @@ loginForm.addEventListener('submit', async (event) => {
       loginError.textContent = responseMessage(response, payload);
       return;
     }
-
     state.auth = { required: true, authenticated: true };
     loginForm.reset();
     showApp();
     await refreshAll();
+    navigate('cameras');
   } catch (error) {
     loginError.textContent = error.message;
   } finally {
@@ -204,135 +262,126 @@ loginForm.addEventListener('submit', async (event) => {
   }
 });
 
-logoutBtn.addEventListener('click', async () => {
-  logoutBtn.disabled = true;
-  try {
-    await fetchJSON('/api/session', { method: 'DELETE' });
-  } finally {
-    logoutBtn.disabled = false;
+async function logout() {
+  const buttons = [logoutBtn, $('#logoutMobileBtn')].filter(Boolean);
+  for (const button of buttons) button.disabled = true;
+  try { await fetchJSON('/api/session', { method: 'DELETE' }); }
+  finally {
+    for (const button of buttons) button.disabled = false;
     state.auth.authenticated = false;
     showLogin('Sesión cerrada correctamente.');
   }
-});
+}
+
+logoutBtn.addEventListener('click', logout);
+$('#logoutMobileBtn').addEventListener('click', logout);
 
 bootRetryBtn.addEventListener('click', bootstrap);
-
-function setStatus(message, ok = true) {
-  statusText.textContent = message;
-  healthDot.classList.toggle('ok', ok);
-  healthDot.classList.toggle('bad', !ok);
-}
 
 async function refreshAll() {
   try {
     const cameras = await api('/api/cameras');
     state.cameras = cameras || [];
+    state.monitorSelected = state.monitorSelected.filter(id => state.cameras.some(camera => camera.id === id));
     renderCameras();
-    await refreshEvents();
-    if (!appView.hidden) setStatus('Servicio activo · FFmpeg disponible', true);
+    renderPicker();
+    await refreshEvents(false);
+    setStatus('Servicio activo', true);
   } catch (error) {
     if (error instanceof SessionRequiredError) return;
     setStatus(error.message, false);
   }
 }
 
-async function checkSessionAfterMediaError(cameraName) {
-  try {
-    const session = await getSessionStatus();
-    state.auth = session;
-    if (session.required && !session.authenticated) {
-      showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
-      return;
-    }
-    setStatus(`No se pudo abrir el vídeo de ${cameraName}`, false);
-  } catch (error) {
-    setStatus(error.message, false);
-  }
+function cameraMatches(camera, query) {
+  if (!query) return true;
+  const haystack = [camera.name, camera.manufacturer, camera.model, camera.endpoint, camera.profile_name]
+    .filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(query.toLowerCase());
 }
 
 function renderCameras() {
+  const query = cameraSearch.value.trim();
+  const cameras = state.cameras.filter(camera => cameraMatches(camera, query));
   cameraGrid.replaceChildren();
   cameraCount.textContent = String(state.cameras.length);
-  emptyState.hidden = state.cameras.length > 0;
+  emptyState.hidden = state.cameras.length > 0 || Boolean(query);
 
-  for (const camera of state.cameras) {
-    const fragment = $('#cameraTemplate').content.cloneNode(true);
-    const card = $('.camera-card', fragment);
-    const image = $('.live-image', card);
-    const placeholder = $('.live-placeholder', card);
-    const startButton = $('.start-live', card);
-    const stopButton = $('.stop-live', card);
+  if (!cameras.length && query) {
+    const noResults = document.createElement('div');
+    noResults.className = 'empty-state';
+    noResults.innerHTML = '<div class="empty-icon" aria-hidden="true">⌕</div><h2>Sin resultados</h2><p>Prueba con otro nombre, modelo o endpoint.</p>';
+    cameraGrid.append(noResults);
+    return;
+  }
+
+  for (const camera of cameras) {
+    const fragment = $('#cameraCardTemplate').content.cloneNode(true);
+    const card = $('.camera-thumb-card', fragment);
+    const mediaButton = $('.camera-thumb-media', card);
+    const image = $('.camera-thumb-image', card);
+    const fallback = $('.camera-thumb-fallback', card);
+    const statusChip = $('.live-chip', card);
+    const statusText = $('.camera-status-text', card);
+    const deleteButton = $('.camera-delete', card);
     const toggle = $('.record-toggle', card);
-    const postRoll = $('.postroll', card);
-    const deleteButton = $('.delete-camera', card);
 
-    $('.camera-name', card).textContent = camera.name;
-    $('.camera-meta', card).textContent = [camera.manufacturer, camera.model, camera.profile_name]
-      .filter(Boolean).join(' · ') || 'Perfil ONVIF';
-    $('.camera-endpoint', card).textContent = camera.endpoint;
-    $('.event-badge', card).textContent = camera.events_supported ? 'Eventos ONVIF' : 'Sin eventos';
+    $('.camera-card-name', card).textContent = camera.name;
+    $('.camera-card-meta', card).textContent = [camera.manufacturer, camera.model, camera.profile_name]
+      .filter(Boolean).join(' · ') || 'Cámara ONVIF';
+    $('.camera-card-endpoint', card).textContent = camera.endpoint;
+    const eventPill = $('.event-support', card);
+    eventPill.textContent = camera.events_supported ? 'Eventos ONVIF' : 'Sin eventos';
+    eventPill.classList.toggle('good', Boolean(camera.events_supported));
     toggle.checked = Boolean(camera.event_recording);
     toggle.disabled = !camera.events_supported;
-    postRoll.value = camera.post_roll_seconds || 20;
-    postRoll.disabled = !camera.events_supported;
 
-    const startLive = () => {
-      image.src = `/api/cameras/${encodeURIComponent(camera.id)}/live?t=${Date.now()}`;
+    image.alt = `Vista previa de ${camera.name}`;
+    image.addEventListener('load', () => {
+      fallback.hidden = true;
       image.hidden = false;
-      placeholder.hidden = true;
-      startButton.hidden = true;
-      stopButton.hidden = false;
-      state.live.add(camera.id);
-    };
-    const stopLive = () => {
-      image.removeAttribute('src');
-      image.hidden = true;
-      placeholder.hidden = false;
-      startButton.hidden = false;
-      stopButton.hidden = true;
-      state.live.delete(camera.id);
-    };
-
-    startButton.addEventListener('click', startLive);
-    stopButton.addEventListener('click', stopLive);
-    image.addEventListener('error', async () => {
-      stopLive();
-      await checkSessionAfterMediaError(camera.name);
+      statusChip.classList.remove('offline');
+      statusText.textContent = 'EN LÍNEA';
     });
+    image.addEventListener('error', () => {
+      image.hidden = true;
+      fallback.hidden = false;
+      statusChip.classList.add('offline');
+      statusText.textContent = 'SIN VISTA';
+    });
+    image.src = `/api/cameras/${encodeURIComponent(camera.id)}/snapshot?v=${state.snapshotRevision}`;
 
-    async function saveRecordingSettings() {
-      const seconds = Math.max(1, Math.min(600, Number(postRoll.value) || 20));
-      postRoll.value = String(seconds);
+    mediaButton.addEventListener('click', () => openMonitor(camera.id));
+
+    toggle.addEventListener('change', async () => {
+      const wanted = toggle.checked;
+      toggle.disabled = true;
       try {
         await api(`/api/cameras/${encodeURIComponent(camera.id)}/recording`, {
           method: 'PUT',
-          body: JSON.stringify({ enabled: toggle.checked, post_roll_seconds: seconds }),
+          body: JSON.stringify({ enabled: wanted, post_roll_seconds: camera.post_roll_seconds || 20 }),
         });
-        camera.event_recording = toggle.checked;
-        camera.post_roll_seconds = seconds;
-        setStatus(`Configuración de ${camera.name} actualizada`, true);
+        camera.event_recording = wanted;
+        setStatus(wanted ? `Grabación por eventos activada en ${camera.name}` : `Grabación por eventos desactivada en ${camera.name}`, true);
       } catch (error) {
-        if (error instanceof SessionRequiredError) return;
-        toggle.checked = Boolean(camera.event_recording);
-        postRoll.value = String(camera.post_roll_seconds || 20);
-        setStatus(error.message, false);
+        toggle.checked = !wanted;
+        if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+      } finally {
+        toggle.disabled = !camera.events_supported;
       }
-    }
-    toggle.addEventListener('change', saveRecordingSettings);
-    postRoll.addEventListener('change', saveRecordingSettings);
+    });
 
     deleteButton.addEventListener('click', async () => {
       const accepted = await confirmAction({
         title: `Eliminar ${camera.name}`,
-        message: 'Esta cámara dejará de aparecer en el visor y se detendrá cualquier vista en vivo activa. Esta acción no elimina grabaciones existentes.',
+        message: 'La cámara dejará de aparecer en el visor y se detendrán sus transmisiones activas. Las grabaciones permanecen en disco, pero dejarán de mostrarse en la biblioteca mientras la cámara no esté configurada.',
         confirmLabel: 'Eliminar cámara',
       });
       if (!accepted) return;
-
       deleteButton.disabled = true;
       try {
         await api(`/api/cameras/${encodeURIComponent(camera.id)}`, { method: 'DELETE' });
-        state.live.delete(camera.id);
+        state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
         await refreshAll();
       } catch (error) {
         if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
@@ -341,18 +390,446 @@ function renderCameras() {
       }
     });
 
-    if (state.live.has(camera.id)) startLive();
     cameraGrid.append(fragment);
   }
 }
 
-async function refreshEvents() {
+function openMonitor(cameraID) {
+  state.monitorSelected = [cameraID];
+  navigate('monitor');
+}
+
+function monitorLayoutClass(count) {
+  return `layout-${Math.max(1, Math.min(9, count || 1))}`;
+}
+
+function renderMonitor() {
+  stopMonitorStreams();
+  monitorStage.replaceChildren();
+  const selected = state.monitorSelected
+    .map(id => state.cameras.find(camera => camera.id === id))
+    .filter(Boolean)
+    .slice(0, 9);
+  state.monitorSelected = selected.map(camera => camera.id);
+
+  monitorStage.className = `monitor-stage ${monitorLayoutClass(selected.length)}`;
+  monitorEmpty.hidden = selected.length > 0;
+  $('#monitorMeta').textContent = `${selected.length} ${selected.length === 1 ? 'cámara activa' : 'cámaras activas'}`;
+  $('#monitorTitle').textContent = selected.length === 1 ? selected[0].name : 'Multivista';
+  $('#singleViewBtn').disabled = selected.length <= 1;
+
+  for (const camera of selected) {
+    const fragment = $('#monitorPaneTemplate').content.cloneNode(true);
+    const pane = $('.monitor-pane', fragment);
+    const image = $('.monitor-live-image', pane);
+    const loading = $('.monitor-pane-loading', pane);
+    const errorBox = $('.monitor-pane-error', pane);
+    const remove = $('.monitor-remove', pane);
+
+    $('.monitor-pane-name', pane).textContent = camera.name;
+    image.alt = `Transmisión en vivo de ${camera.name}`;
+    image.addEventListener('load', () => { loading.hidden = true; errorBox.hidden = true; });
+    image.addEventListener('error', async () => {
+      loading.hidden = true;
+      errorBox.hidden = false;
+      try {
+        const session = await getSessionStatus();
+        if (session.required && !session.authenticated) showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
+      } catch (_) {}
+    });
+    remove.addEventListener('click', () => {
+      state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
+      renderMonitor();
+    });
+    image.src = `/api/cameras/${encodeURIComponent(camera.id)}/live?t=${Date.now()}`;
+    monitorStage.append(fragment);
+  }
+
+  renderPicker();
+}
+
+function renderPicker() {
+  if (!pickerList) return;
+  const query = pickerSearch.value.trim();
+  const cameras = state.cameras.filter(camera => cameraMatches(camera, query));
+  pickerList.replaceChildren();
+  $('#pickerCount').textContent = `${state.monitorSelected.length} / 9 seleccionadas`;
+
+  for (const camera of cameras) {
+    const label = document.createElement('label');
+    label.className = 'picker-item';
+    const selected = state.monitorSelected.includes(camera.id);
+    label.classList.toggle('selected', selected);
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = selected;
+    checkbox.disabled = !selected && state.monitorSelected.length >= 9;
+    const details = document.createElement('div');
+    const name = document.createElement('strong');
+    const meta = document.createElement('span');
+    name.textContent = camera.name;
+    meta.textContent = [camera.manufacturer, camera.model].filter(Boolean).join(' · ') || camera.endpoint;
+    details.append(name, meta);
+    label.append(checkbox, details);
+
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) {
+        if (state.monitorSelected.length >= 9) {
+          checkbox.checked = false;
+          setStatus('La multivista admite hasta 9 cámaras simultáneas.', false);
+          return;
+        }
+        state.monitorSelected.push(camera.id);
+      } else {
+        state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
+      }
+      renderMonitor();
+    });
+    pickerList.append(label);
+  }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value / 1024;
+  let unit = units[0];
+  for (let i = 1; i < units.length && size >= 1024; i++) {
+    size /= 1024;
+    unit = units[i];
+  }
+  return `${size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${unit}`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total} s`;
+  if (total < 3600) return `${Math.floor(total / 60)} min`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${hours} h${minutes ? ` ${minutes} min` : ''}`;
+}
+
+function formatClock(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return hours > 0
+    ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+    : `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function localDateKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function loadRecordings() {
+  const loading = $('#recordingsLoading');
+  const empty = $('#recordingsEmpty');
+  const workspace = $('#recordingsWorkspace');
+  loading.hidden = false;
+  empty.hidden = true;
+  $('h2', empty).textContent = 'No hay grabaciones almacenadas';
+  $('p', empty).textContent = 'Activa la grabación por eventos en una cámara para que los clips aparezcan aquí.';
+  workspace.hidden = true;
+  try {
+    state.recordings = await api('/api/recordings') || [];
+    const cameraStillExists = state.cameras.some(camera => camera.id === state.recordingCameraID);
+    if (!cameraStillExists) {
+      const firstWithRecording = state.cameras.find(camera => state.recordings.some(recording => recording.camera_id === camera.id));
+      state.recordingCameraID = firstWithRecording?.id || state.cameras[0]?.id || '';
+    }
+    renderRecordingCameraList();
+    loading.hidden = true;
+    if (!state.cameras.length) {
+      empty.hidden = false;
+      return;
+    }
+    workspace.hidden = false;
+    selectRecordingCamera(state.recordingCameraID, Boolean(state.recordingDate));
+    setStatus('Biblioteca de grabaciones actualizada', true);
+  } catch (error) {
+    loading.hidden = true;
+    if (error instanceof SessionRequiredError) return;
+    empty.hidden = false;
+    $('h2', empty).textContent = 'No se pudo cargar el almacenamiento';
+    $('p', empty).textContent = error.message;
+    setStatus(error.message, false);
+  }
+}
+
+function recordingsForCamera(cameraID) {
+  return state.recordings.filter(recording => recording.camera_id === cameraID);
+}
+
+function renderRecordingCameraList() {
+  const list = $('#recordingCameraList');
+  list.replaceChildren();
+  for (const camera of state.cameras) {
+    const recordings = recordingsForCamera(camera.id);
+    const size = recordings.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'recording-camera-item';
+    button.classList.toggle('active', camera.id === state.recordingCameraID);
+    const details = document.createElement('div');
+    const name = document.createElement('strong');
+    const meta = document.createElement('span');
+    const count = document.createElement('span');
+    name.textContent = camera.name;
+    meta.textContent = recordings.length ? `${formatBytes(size)} · ${recordings.length} clips` : 'Sin grabaciones';
+    count.className = 'recording-camera-count';
+    count.textContent = String(recordings.length);
+    details.append(name, meta);
+    button.append(details, count);
+    button.addEventListener('click', () => selectRecordingCamera(camera.id, false));
+    list.append(button);
+  }
+}
+
+function selectRecordingCamera(cameraID, preserveDate = false) {
+  if (!cameraID) return;
+  stopRecordingPlayback();
+  $('#recordingPlayer').hidden = true;
+  state.recordingCameraID = cameraID;
+  const camera = state.cameras.find(item => item.id === cameraID);
+  const recordings = recordingsForCamera(cameraID);
+  if (!preserveDate || !state.recordingDate) {
+    state.recordingDate = recordings.length ? localDateKey(recordings[0].started_at) : localDateKey(new Date());
+  }
+  $('#recordingDate').value = state.recordingDate;
+  $('#recordingCameraTitle').textContent = camera?.name || 'Grabaciones';
+  renderRecordingCameraList();
+  renderRecordingStats(recordings);
+  renderRecordingTimeline(recordings);
+  renderRecordingCards(recordings);
+}
+
+function renderRecordingStats(recordings) {
+  const size = recordings.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
+  const duration = recordings.reduce((sum, recording) => sum + (Number(recording.duration_seconds) || 0), 0);
+  $('#recordingCount').textContent = String(recordings.length);
+  $('#recordingSize').textContent = formatBytes(size);
+  $('#recordingDuration').textContent = formatDuration(duration);
+}
+
+function recordingsOnSelectedDate(recordings) {
+  return recordings.filter(recording => localDateKey(recording.started_at) === state.recordingDate);
+}
+
+function renderRecordingTimeline(recordings) {
+  const timeline = $('#recordingTimeline');
+  const clips = recordingsOnSelectedDate(recordings);
+  timeline.replaceChildren();
+  $('#timelineEmpty').hidden = clips.length > 0;
+
+  for (const recording of clips) {
+    const date = new Date(recording.started_at);
+    const secondsFromMidnight = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds() + date.getMilliseconds() / 1000;
+    const duration = Math.max(1, Number(recording.duration_seconds) || 1);
+    const left = Math.max(0, Math.min(100, secondsFromMidnight / 86400 * 100));
+    const width = Math.max(.35, Math.min(100 - left, duration / 86400 * 100));
+    const clip = document.createElement('button');
+    clip.type = 'button';
+    clip.className = 'timeline-clip';
+    clip.classList.toggle('active', state.playback.recording?.name === recording.name && state.playback.recording?.camera_id === recording.camera_id);
+    clip.style.left = `${left}%`;
+    clip.style.width = `${width}%`;
+    clip.title = `${date.toLocaleTimeString()} · ${formatDuration(duration)}`;
+    clip.setAttribute('aria-label', `Reproducir grabación de ${date.toLocaleTimeString()}`);
+    clip.addEventListener('click', () => selectRecording(recording));
+    timeline.append(clip);
+  }
+}
+
+function renderRecordingCards(recordings) {
+  const list = $('#recordingList');
+  list.replaceChildren();
+  $('#recordingListMeta').textContent = `${recordings.length} ${recordings.length === 1 ? 'grabación' : 'grabaciones'}`;
+
+  if (!recordings.length) {
+    const empty = document.createElement('div');
+    empty.className = 'placeholder-panel';
+    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◫</div><h2>Esta cámara todavía no tiene clips</h2><p>Las grabaciones aparecerán aquí cuando se active un evento compatible.</p>';
+    list.append(empty);
+    return;
+  }
+
+  for (const recording of recordings) {
+    const card = document.createElement('article');
+    card.className = 'recording-card';
+    card.classList.toggle('active', state.playback.recording?.name === recording.name && state.playback.recording?.camera_id === recording.camera_id);
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'recording-preview';
+    const image = document.createElement('img');
+    const fallback = document.createElement('div');
+    const play = document.createElement('span');
+    image.alt = `Miniatura de grabación ${new Date(recording.started_at).toLocaleString()}`;
+    image.loading = 'lazy';
+    image.src = recordingSnapshotURL(recording);
+    fallback.className = 'recording-preview-fallback';
+    fallback.hidden = true;
+    fallback.innerHTML = '<span aria-hidden="true">◫</span><strong>Sin miniatura</strong>';
+    play.className = 'recording-card-play';
+    play.innerHTML = '<i aria-hidden="true">▶</i>';
+    image.addEventListener('error', () => { image.hidden = true; fallback.hidden = false; });
+    preview.append(image, fallback, play);
+    if (recording.active) {
+      const badge = document.createElement('span');
+      badge.className = 'recording-live-badge';
+      badge.textContent = 'GRABANDO';
+      preview.append(badge);
+    }
+    preview.addEventListener('click', () => selectRecording(recording));
+
+    const body = document.createElement('div');
+    body.className = 'recording-card-body';
+    const title = document.createElement('h3');
+    title.className = 'recording-card-title';
+    title.textContent = new Date(recording.started_at).toLocaleString();
+    const meta = document.createElement('div');
+    meta.className = 'recording-card-meta';
+    const duration = document.createElement('span');
+    const size = document.createElement('span');
+    duration.textContent = formatDuration(recording.duration_seconds);
+    size.textContent = formatBytes(recording.size_bytes);
+    meta.append(duration, size);
+    body.append(title, meta);
+    card.append(preview, body);
+    list.append(card);
+  }
+}
+
+function recordingBaseURL(recording) {
+  return `/api/recordings/${encodeURIComponent(recording.camera_id)}/${encodeURIComponent(recording.name)}`;
+}
+
+function recordingSnapshotURL(recording) {
+  return `${recordingBaseURL(recording)}/snapshot`;
+}
+
+function selectRecording(recording) {
+  state.recordingDate = localDateKey(recording.started_at);
+  $('#recordingDate').value = state.recordingDate;
+  $('#recordingPlayer').hidden = false;
+  $('#recordingPlayerTitle').textContent = new Date(recording.started_at).toLocaleTimeString();
+  $('#recordingPlayerDate').textContent = new Date(recording.started_at).toLocaleString();
+  $('#recordingDownload').href = `${recordingBaseURL(recording)}/download`;
+  $('#recordingScrubber').max = String(Math.max(1, Number(recording.duration_seconds) || 1));
+  $('#recordingTotalTime').textContent = formatClock(recording.duration_seconds);
+  startRecordingPlayback(recording, 0);
+  renderRecordingTimeline(recordingsForCamera(recording.camera_id));
+  renderRecordingCards(recordingsForCamera(recording.camera_id));
+  $('#recordingPlayer').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function startRecordingPlayback(recording, offset = 0) {
+  stopRecordingPlayback(false);
+  const duration = Math.max(0, Number(recording.duration_seconds) || 0);
+  const safeOffset = Math.max(0, duration > 0 ? Math.min(offset, Math.max(0, duration - .1)) : offset);
+  state.playback.recording = recording;
+  state.playback.offset = safeOffset;
+  state.playback.startedAt = performance.now();
+  state.playback.playing = true;
+
+  const image = $('#recordingPlaybackImage');
+  const loading = $('#recordingPlaybackLoading');
+  const errorBox = $('#recordingPlaybackError');
+  loading.hidden = false;
+  errorBox.hidden = true;
+  image.hidden = false;
+  image.onload = () => { loading.hidden = true; errorBox.hidden = true; };
+  image.onerror = async () => {
+    loading.hidden = true;
+    if (state.playback.playing) errorBox.hidden = false;
+    try {
+      const session = await getSessionStatus();
+      if (session.required && !session.authenticated) showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
+    } catch (_) {}
+  };
+  image.src = `${recordingBaseURL(recording)}/play?start=${safeOffset.toFixed(3)}&t=${Date.now()}`;
+  $('#recordingPlayPause').textContent = 'Pausar';
+  updatePlaybackUI(safeOffset);
+  state.playback.timer = setInterval(updatePlaybackProgress, 400);
+}
+
+function currentPlaybackOffset() {
+  if (!state.playback.recording) return 0;
+  if (!state.playback.playing) return state.playback.offset;
+  return state.playback.offset + (performance.now() - state.playback.startedAt) / 1000;
+}
+
+function updatePlaybackProgress() {
+  const recording = state.playback.recording;
+  if (!recording || !state.playback.playing) return;
+  const duration = Math.max(0, Number(recording.duration_seconds) || 0);
+  const current = currentPlaybackOffset();
+  if (duration > 0 && current >= duration) {
+    state.playback.offset = duration;
+    state.playback.playing = false;
+    $('#recordingPlaybackImage').removeAttribute('src');
+    if (state.playback.timer !== null) clearInterval(state.playback.timer);
+    state.playback.timer = null;
+    $('#recordingPlayPause').textContent = 'Reproducir';
+    updatePlaybackUI(duration);
+    return;
+  }
+  updatePlaybackUI(current);
+}
+
+function updatePlaybackUI(seconds) {
+  const scrubber = $('#recordingScrubber');
+  const max = Number(scrubber.max) || 1;
+  const value = Math.max(0, Math.min(max, Number(seconds) || 0));
+  scrubber.value = String(value);
+  $('#recordingCurrentTime').textContent = formatClock(value);
+}
+
+function stopRecordingPlayback(clearRecording = true) {
+  if (state.playback.playing) state.playback.offset = currentPlaybackOffset();
+  state.playback.playing = false;
+  if (state.playback.timer !== null) clearInterval(state.playback.timer);
+  state.playback.timer = null;
+  const image = $('#recordingPlaybackImage');
+  if (image) image.removeAttribute('src');
+  if (clearRecording) {
+    state.playback.recording = null;
+    state.playback.offset = 0;
+  }
+}
+
+function toggleRecordingPlayback() {
+  const recording = state.playback.recording;
+  if (!recording) return;
+  if (state.playback.playing) {
+    state.playback.offset = currentPlaybackOffset();
+    state.playback.playing = false;
+    if (state.playback.timer !== null) clearInterval(state.playback.timer);
+    state.playback.timer = null;
+    $('#recordingPlaybackImage').removeAttribute('src');
+    $('#recordingPlayPause').textContent = 'Reproducir';
+    updatePlaybackUI(state.playback.offset);
+    return;
+  }
+  startRecordingPlayback(recording, state.playback.offset);
+}
+
+async function refreshEvents(updateStatus = true) {
   try {
     const events = await api('/api/events');
     renderEvents(events || []);
+    if (updateStatus) setStatus('Eventos actualizados', true);
   } catch (error) {
     if (error instanceof SessionRequiredError) return;
-    if (!appView.hidden) setStatus(error.message, false);
+    if (updateStatus) setStatus(error.message, false);
   }
 }
 
@@ -360,13 +837,13 @@ function renderEvents(events) {
   const list = $('#eventsList');
   list.replaceChildren();
   if (!events.length) {
-    const empty = document.createElement('p');
-    empty.className = 'hint';
-    empty.textContent = 'Todavía no se han recibido eventos ONVIF.';
+    const empty = document.createElement('div');
+    empty.className = 'placeholder-panel';
+    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◉</div><h2>Sin eventos recientes</h2><p>Los eventos ONVIF aparecerán aquí cuando una cámara los reporte.</p>';
     list.append(empty);
     return;
   }
-  for (const event of events.slice(0, 60)) {
+  for (const event of events.slice(0, 100)) {
     const row = document.createElement('div');
     row.className = 'event-row';
     const camera = document.createElement('strong');
@@ -382,7 +859,7 @@ function renderEvents(events) {
     if (event.recording_trigger) {
       const trigger = document.createElement('div');
       trigger.className = 'event-trigger';
-      trigger.textContent = '● dispara grabación';
+      trigger.textContent = '● grabación activada';
       right.append(trigger);
     }
     row.append(camera, topic, right);
@@ -422,6 +899,7 @@ async function discover() {
         details.append(location);
       }
       const add = document.createElement('button');
+      add.className = 'button primary';
       add.textContent = 'Agregar';
       add.addEventListener('click', () => {
         $('#cameraName').value = device.name || '';
@@ -446,11 +924,8 @@ function confirmAction({ title, message, confirmLabel = 'Confirmar' }) {
   $('#confirmAcceptBtn').textContent = confirmLabel;
   confirmDialog.returnValue = 'cancel';
   confirmDialog.showModal();
-
-  return new Promise((resolve) => {
-    confirmDialog.addEventListener('close', () => {
-      resolve(confirmDialog.returnValue === 'confirm');
-    }, { once: true });
+  return new Promise(resolve => {
+    confirmDialog.addEventListener('close', () => resolve(confirmDialog.returnValue === 'confirm'), { once: true });
   });
 }
 
@@ -472,6 +947,7 @@ $('#cameraForm').addEventListener('submit', async (event) => {
     });
     cameraDialog.close();
     $('#cameraForm').reset();
+    state.snapshotRevision = Date.now();
     await refreshAll();
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
@@ -480,10 +956,56 @@ $('#cameraForm').addEventListener('submit', async (event) => {
   }
 });
 
+for (const item of $$('.nav-item[data-view]')) item.addEventListener('click', () => navigate(item.dataset.view));
 $('#addBtn').addEventListener('click', () => cameraDialog.showModal());
+$('#emptyAddBtn').addEventListener('click', () => cameraDialog.showModal());
 $('#discoverBtn').addEventListener('click', discover);
-$('#refreshBtn').addEventListener('click', refreshAll);
-$('#eventsRefreshBtn').addEventListener('click', refreshEvents);
+$('#emptyDiscoverBtn').addEventListener('click', discover);
+$('#eventsRefreshBtn').addEventListener('click', () => refreshEvents(true));
+$('#backToCamerasBtn').addEventListener('click', () => navigate('cameras'));
+$('#singleViewBtn').addEventListener('click', () => {
+  if (state.monitorSelected.length > 1) {
+    state.monitorSelected = [state.monitorSelected[0]];
+    renderMonitor();
+  }
+});
+$('#togglePickerBtn').addEventListener('click', () => monitorPicker.classList.toggle('open'));
+$('#closePickerBtn').addEventListener('click', () => monitorPicker.classList.remove('open'));
+$('#monitorEmptyAddBtn').addEventListener('click', () => monitorPicker.classList.add('open'));
+$('#refreshSnapshotsBtn').addEventListener('click', () => {
+  state.snapshotRevision = Date.now();
+  renderCameras();
+  setStatus('Miniaturas actualizadas', true);
+});
+cameraSearch.addEventListener('input', renderCameras);
+pickerSearch.addEventListener('input', renderPicker);
+$('#recordingsRefreshBtn').addEventListener('click', loadRecordings);
+$('#recordingDate').addEventListener('change', (event) => {
+  state.recordingDate = event.target.value;
+  renderRecordingTimeline(recordingsForCamera(state.recordingCameraID));
+});
+$('#recordingPlayPause').addEventListener('click', toggleRecordingPlayback);
+$('#recordingScrubber').addEventListener('input', (event) => {
+  $('#recordingCurrentTime').textContent = formatClock(Number(event.target.value));
+});
+$('#recordingScrubber').addEventListener('change', (event) => {
+  const recording = state.playback.recording;
+  if (!recording) return;
+  const offset = Number(event.target.value) || 0;
+  const wasPlaying = state.playback.playing;
+  if (wasPlaying) {
+    startRecordingPlayback(recording, offset);
+  } else {
+    state.playback.offset = offset;
+    updatePlaybackUI(offset);
+  }
+});
+$('#recordingClosePlayer').addEventListener('click', () => {
+  stopRecordingPlayback();
+  $('#recordingPlayer').hidden = true;
+  renderRecordingTimeline(recordingsForCamera(state.recordingCameraID));
+  renderRecordingCards(recordingsForCamera(state.recordingCameraID));
+});
 
 for (const button of $$('[data-close]')) {
   button.addEventListener('click', () => {
@@ -492,6 +1014,9 @@ for (const button of $$('[data-close]')) {
   });
 }
 
-window.addEventListener('beforeunload', stopLiveImages);
+window.addEventListener('beforeunload', () => {
+  stopMonitorStreams();
+  stopRecordingPlayback();
+});
 
 bootstrap();
