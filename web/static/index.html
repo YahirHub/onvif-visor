@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ONVIF Visor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">VISOR LOCAL</p>
+      <h1>ONVIF Visor</h1>
+      <p class="subtitle">Cámaras en vivo, descubrimiento y grabación por eventos.</p>
+    </div>
+    <div class="actions">
+      <button id="discoverBtn" class="secondary">Detectar cámaras</button>
+      <button id="addBtn">Agregar cámara</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="statusbar" aria-live="polite">
+      <span id="healthDot" class="dot"></span>
+      <span id="statusText">Conectando…</span>
+      <span class="spacer"></span>
+      <button id="refreshBtn" class="linkbutton">Actualizar</button>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <div>
+          <p class="eyebrow">MONITOREO</p>
+          <h2>Cámaras</h2>
+        </div>
+        <span id="cameraCount" class="pill">0</span>
+      </div>
+      <div id="cameraGrid" class="camera-grid"></div>
+      <div id="emptyState" class="empty">
+        <h3>No hay cámaras agregadas</h3>
+        <p>Usa “Detectar cámaras” para buscar dispositivos ONVIF en la red o agrégala manualmente.</p>
+      </div>
+    </section>
+
+    <section class="events-section">
+      <div class="section-title">
+        <div>
+          <p class="eyebrow">ACTIVIDAD</p>
+          <h2>Eventos recientes</h2>
+        </div>
+        <button id="eventsRefreshBtn" class="linkbutton">Actualizar</button>
+      </div>
+      <div id="eventsList" class="events-list"></div>
+    </section>
+  </main>
+
+  <dialog id="cameraDialog">
+    <form id="cameraForm" method="dialog">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">NUEVA CÁMARA</p>
+          <h2>Agregar ONVIF</h2>
+        </div>
+        <button type="button" class="iconbutton" data-close="cameraDialog" aria-label="Cerrar">×</button>
+      </div>
+      <label>Nombre
+        <input id="cameraName" name="name" autocomplete="off" placeholder="Entrada principal">
+      </label>
+      <label>Endpoint ONVIF
+        <input id="cameraEndpoint" name="endpoint" required autocomplete="url" placeholder="http://192.168.1.50/onvif/device_service">
+      </label>
+      <div class="form-row">
+        <label>Usuario
+          <input id="cameraUsername" name="username" autocomplete="username">
+        </label>
+        <label>Contraseña
+          <input id="cameraPassword" name="password" type="password" autocomplete="current-password">
+        </label>
+      </div>
+      <p class="hint">La contraseña se cifra antes de guardarse. El URI RTSP almacenado nunca incluye credenciales.</p>
+      <div id="cameraFormError" class="form-error" role="alert"></div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close="cameraDialog">Cancelar</button>
+        <button id="saveCameraBtn" type="submit">Validar y agregar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="discoveryDialog" class="wide-dialog">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">WS-DISCOVERY</p>
+        <h2>Dispositivos encontrados</h2>
+      </div>
+      <button type="button" class="iconbutton" data-close="discoveryDialog" aria-label="Cerrar">×</button>
+    </div>
+    <p id="discoveryStatus" class="hint">Buscando cámaras ONVIF en la red local…</p>
+    <div id="discoveryList" class="discovery-list"></div>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" data-close="discoveryDialog">Cerrar</button>
+    </div>
+  </dialog>
+
+  <template id="cameraTemplate">
+    <article class="camera-card">
+      <div class="camera-frame">
+        <div class="live-placeholder">
+          <span>Vista detenida</span>
+          <button class="start-live secondary">Ver en vivo</button>
+        </div>
+        <img class="live-image" alt="Vídeo en vivo" hidden>
+      </div>
+      <div class="camera-body">
+        <div class="camera-heading">
+          <div>
+            <h3 class="camera-name"></h3>
+            <p class="camera-meta"></p>
+          </div>
+          <span class="event-badge pill"></span>
+        </div>
+        <p class="camera-endpoint mono"></p>
+        <div class="recording-row">
+          <label class="switchline">
+            <input class="record-toggle" type="checkbox">
+            <span>Grabar por eventos</span>
+          </label>
+          <label class="postroll-label">Post-roll
+            <input class="postroll" type="number" min="1" max="600" value="20">
+            <span>s</span>
+          </label>
+        </div>
+        <div class="card-actions">
+          <button class="stop-live secondary" hidden>Detener vista</button>
+          <button class="delete-camera danger">Eliminar</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

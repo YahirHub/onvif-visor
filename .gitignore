@@ -1,0 +1,6 @@
+data/
+recordings/
+dist/
+onvif-visor
+*.log
+.DS_Store
