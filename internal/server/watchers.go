@@ -129,4 +129,7 @@ func (a *App) onCameraEvent(cameraID string, event onvifsvc.Event) {
 		}
 	}
 	a.addEvent(cam, event, status, triggered)
+	if event.Recording {
+		go a.notifyTelegramEvent(cam, event, status)
+	}
 }

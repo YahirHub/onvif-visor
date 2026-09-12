@@ -11,11 +11,15 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - URI RTSP persistida sin usuario ni contraseña.
 - Contraseñas de cámaras cifradas localmente con AES-256-GCM.
 - Interfaz web profesional embebida dentro del binario Go.
-- Login propio del frontend con sesión `HttpOnly` cuando el visor se publica en LAN.
+- Login propio del frontend respaldado por SQLite embebido: contraseñas bcrypt y sesiones `HttpOnly` persistentes de 30 días que sobreviven reinicios.
+- Vista **Sesiones** con IP/dispositivo/actividad y revocación individual o cierre de todas las demás sesiones conservando la actual.
 - Galería inicial tipo thumbnails: cada cámara obtiene un snapshot JPEG bajo demanda en vez de abrir un stream continuo.
 - Click en una miniatura para abrir la transmisión RTSP -> MJPEG en tiempo real con cola de un solo frame: si el cliente se atrasa se descartan cuadros viejos en vez de acumular delay.
 - Multivista adaptable de hasta 9 cámaras: 2 mitad/mitad, 3 con vista principal + dos secundarias, 4 en 2x2, 5-6 en 3x2 y 7-9 en 3x3.
-- Selector de cámaras dentro de la multivista para agregar o quitar streams sin reiniciar los que ya están reproduciéndose; las nuevas vistas múltiples usan un perfil más ligero.
+- Selector de cámaras dentro de la multivista para agregar o quitar streams sin reiniciar los que ya están reproduciéndose; el perfil ligero mantiene el mismo RTSP y reduce FPS/resolución sin cambiar la relación de aspecto.
+- Botón de pantalla completa para el monitor: Fullscreen API cuando está disponible y modo teatro sin sidebar como fallback.
+- Diseño responsivo para desktop, tablet y móvil, con safe-area, navegación inferior desplazable y panes 16:9 en pantallas pequeñas.
+- Skeletons de carga para cámaras, grabaciones, eventos, sesiones, descubrimiento e Integraciones/Telegram, con `prefers-reduced-motion` para evitar animaciones cuando el sistema lo solicita.
 - Suscripción ONVIF PullPoint para recibir eventos cuando el firmware la implementa correctamente.
 - Detector local de movimiento por FFmpeg como respaldo cuando PullPoint falla o no está disponible.
 - Grabación automática ante movimiento/eventos y grabación programada por días y horario.
@@ -26,25 +30,29 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Línea de tiempo de 24 horas filtrable por fecha.
 - Escritura Matroska con clusters cortos, flush frecuente y sincronización periódica a disco para reducir el daño ante una interrupción brusca.
 - Compresión H.264 en segundo plano al cerrar un clip; el original sólo se reemplaza atómicamente cuando el resultado es válido y realmente ahorra espacio.
+- Módulo **Integraciones > Telegram**: valida el token con Bot API, lo guarda cifrado, vincula chats con códigos de 4 dígitos de un solo uso válidos 10 minutos y permite eliminar por completo la integración.
+- Alertas Telegram configurables por evento con foto o fragmento MP4 de 3–10 s, además de comandos `/camaras`, `/foto <camara>` y `/video <camara>` para chats vinculados.
 - Reproducción web de clips mediante FFmpeg -> MJPEG, con pausa/reanudación y seek por segundos.
 - Descarga autenticada del MKV original.
 - Servicio ligado a `127.0.0.1` por defecto.
-- Sin base de datos: configuración en archivos locales.
+- Sin servidor de base de datos externo: cámaras permanecen en archivos locales y usuarios/sesiones/integraciones usan SQLite embebido dentro de `data/`.
 
 ## Arquitectura
 
 ```text
 cmd/onvif-visor/      ejecutable principal
 internal/onvif/       descubrimiento, perfiles, RTSP y Events/PullPoint
-internal/store/       persistencia y cifrado de credenciales
-internal/media/       FFmpeg live, snapshots, grabación y playback
-internal/server/      API HTTP, seguridad y coordinación
+internal/store/       persistencia de cámaras y cifrado AES-GCM de secretos
+internal/account/     SQLite embebido para usuarios, sesiones y estado Telegram
+internal/telegram/    cliente Bot API con long polling y envío de medios
+internal/media/       FFmpeg live, snapshots, grabación, clips y playback
+internal/server/      API HTTP, seguridad, sesiones, eventos e integraciones
 web/                  HTML/CSS/JS embebidos con go:embed
 contexto/             bitácora Ponytail
 tareas/               tareas Ponytail
 ```
 
-El binario de la aplicación se compila con `CGO_ENABLED=0`, por lo que es estático. FFmpeg es una dependencia de runtime independiente y se usa únicamente para medios: RTSP -> MJPEG, snapshots, escritura de grabaciones y reproducción web de clips. No se requiere Node.js, Python, PHP, nginx ni una base de datos.
+El binario de la aplicación se compila con `CGO_ENABLED=0`, por lo que es estático. SQLite se enlaza como implementación pura Go (`modernc.org/sqlite`), sin servicio externo. FFmpeg es una dependencia de runtime independiente y se usa únicamente para medios: RTSP -> MJPEG, snapshots, escritura de grabaciones, clips Telegram y reproducción web. No se requiere Node.js, Python, PHP, nginx ni un servidor de base de datos.
 
 ## Requisitos
 
@@ -89,6 +97,7 @@ Por defecto se crean:
 ```text
 data/master.key
 data/cameras.json
+data/accounts.db
 recordings/<camera-id>/*.mkv
 ```
 
@@ -96,7 +105,7 @@ recordings/<camera-id>/*.mkv
 
 ## Publicar en la LAN
 
-No se permite escuchar fuera de loopback sin usuario y contraseña. Ejemplo:
+No se permite escuchar fuera de loopback sin que exista al menos un usuario en SQLite. En el primer arranque LAN se crea/actualiza el usuario bootstrap con los flags o variables de entorno; después la cuenta permanece en `data/accounts.db` y no es necesario volver a pasar las credenciales para conservarla. Ejemplo:
 
 ```bash
 ONVIF_VISOR_USER='operador' \
@@ -104,7 +113,7 @@ ONVIF_VISOR_PASSWORD='cambia-esto-por-una-clave-larga' \
   ./dist/onvif-visor -listen 0.0.0.0:8080
 ```
 
-La propia interfaz muestra una pantalla de login. Al validar las credenciales, el servidor crea una cookie de sesión `HttpOnly` y `SameSite=Strict`; no se usan diálogos HTTP Basic, `window.prompt` ni credenciales incrustadas en URLs.
+La propia interfaz muestra una pantalla de login. Al validar las credenciales contra bcrypt, el servidor crea una cookie `HttpOnly` y `SameSite=Strict` con un token aleatorio; SQLite conserva únicamente su SHA-256. La sesión dura 30 días, sobrevive reinicios y puede revocarse desde **Sesiones**. No se usan diálogos HTTP Basic, `window.prompt` ni credenciales incrustadas en URLs.
 
 Para una red no confiable se recomienda colocar TLS delante del servicio. El modo LAN integrado usa HTTP y está pensado para una LAN privada/controlada.
 
@@ -119,7 +128,10 @@ Para una red no confiable se recomienda colocar TLS delante del servicio. El mod
 7. Usar el botón **◷** de la tarjeta para activar un horario, elegir días de la semana y definir hora inicial/final; los horarios que cruzan medianoche están soportados.
 8. Abrir **Grabaciones** para elegir una cámara, revisar sus clips, filtrar la fecha y usar la línea de tiempo.
 9. Pulsar una tarjeta o bloque de timeline para reproducir. El scrubber reinicia la reproducción desde el segundo seleccionado y el MKV original puede descargarse.
-10. Abrir **Eventos** para consultar movimiento y eventos recientes y saber cuáles dispararon grabación.
+10. Abrir **Eventos** para consultar movimiento y eventos recientes y saltar al instante de una grabación asociada.
+11. Abrir **Sesiones** para revisar accesos persistentes y cerrar todos los demás dispositivos sin perder la sesión actual.
+12. Abrir **Integraciones > Telegram** para validar el token, vincular chats y elegir alertas por foto o vídeo.
+13. En **Multivista**, usar **⛶** para fullscreen; en navegadores sin Fullscreen API se activa el modo teatro sin sidebar.
 
 ## Endpoint manual
 
@@ -166,6 +178,12 @@ El visor reconoce tópicos/datos relacionados con:
 
 Cuando un evento incluye un estado explícito `false`, `off`, `inactive`, `idle` o equivalente, no se inicia una nueva grabación. Si llega otro evento activo durante una grabación, el vencimiento del post-roll se extiende en vez de crear otro proceso FFmpeg para la misma cámara.
 
+## Integración Telegram
+
+La vista **Integraciones** permite conectar un bot dedicado mediante el token de BotFather. El backend valida el token con `getMe`, cifra el secreto con la misma llave maestra AES-GCM usada para otros secretos y nunca lo devuelve a la API del navegador. Una vez configurado se muestra la URL `https://t.me/<bot>` y pueden generarse códigos de 4 dígitos de un solo uso, válidos 10 minutos. En Telegram se aceptan `/start CODIGO` y `/login CODIGO`.
+
+Un chat vinculado puede usar `/camaras`, `/foto <camara>` y `/video <camara>`. Las alertas automáticas de detección pueden enviar una foto actual o un MP4 corto de 3 a 10 segundos; el panel permite activar/desactivar avisos y elegir el medio. Para evitar carga excesiva, sólo se captura un vídeo Telegram a la vez y se aplica un intervalo mínimo por cámara. Eliminar la integración borra el token cifrado, los códigos y los chats vinculados.
+
 ## Seguridad
 
 - La contraseña de la cámara no se devuelve en las APIs de listado.
@@ -173,8 +191,9 @@ Cuando un evento incluye un estado explícito `false`, `off`, `inactive`, `idle`
 - El archivo `master.key` se crea con permisos `0600` y el directorio de datos con `0700`.
 - El URI RTSP guardado no contiene credenciales.
 - La salida de FFmpeg se descarta para evitar que errores puedan terminar registrando un URI RTSP sensible.
-- El servicio escucha únicamente en loopback salvo que se solicite explícitamente LAN y se configuren usuario y contraseña.
-- La sesión LAN usa un token aleatorio en cookie `HttpOnly`, `SameSite=Strict` y `Secure` cuando la petición entra por HTTPS.
+- El servicio escucha únicamente en loopback salvo que se solicite explícitamente LAN y exista al menos un usuario persistido; las credenciales bootstrap sólo son obligatorias para crear la primera cuenta.
+- Las contraseñas de usuarios se almacenan con bcrypt. La sesión usa un token aleatorio en cookie `HttpOnly`, `SameSite=Strict` y `Secure` cuando la petición entra por HTTPS; SQLite persiste únicamente el SHA-256 del token.
+- Los tokens de Telegram se validan antes de guardarse, se cifran con AES-256-GCM y no se devuelven a las APIs de configuración.
 - Las rutas de grabaciones validan que el archivo solicitado sea un basename `.mkv` dentro del directorio calculado de la cámara; se rechaza path traversal.
 - Los endpoints de snapshot, live, playback y descarga permanecen detrás de la misma sesión de UI.
 
@@ -200,8 +219,8 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 -data-dir           directorio de configuración; default data
 -recordings-dir     directorio de grabaciones; default recordings
 -ffmpeg             ruta de ffmpeg; default ffmpeg
--ui-user            usuario para modo LAN; también ONVIF_VISOR_USER
--ui-password        contraseña para modo LAN; también ONVIF_VISOR_PASSWORD
+-ui-user            usuario bootstrap; también ONVIF_VISOR_USER
+-ui-password        contraseña bootstrap; también ONVIF_VISOR_PASSWORD
 ```
 
 ## Validación del proyecto

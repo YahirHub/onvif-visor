@@ -196,6 +196,14 @@ func (s *Store) encrypt(plain string) (string, error) {
 	return base64.RawStdEncoding.EncodeToString(payload), nil
 }
 
+func (s *Store) EncryptSecret(plain string) (string, error) {
+	return s.encrypt(plain)
+}
+
+func (s *Store) DecryptSecret(encoded string) (string, error) {
+	return s.decrypt(encoded)
+}
+
 func (s *Store) decrypt(encoded string) (string, error) {
 	payload, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil {

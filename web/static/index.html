@@ -57,6 +57,12 @@
         <button class="nav-item" type="button" data-view="events" title="Eventos">
           <span class="nav-icon" aria-hidden="true">◉</span><span>Eventos</span>
         </button>
+        <button class="nav-item" type="button" data-view="sessions" title="Sesiones">
+          <span class="nav-icon" aria-hidden="true">◎</span><span>Sesiones</span>
+        </button>
+        <button class="nav-item" type="button" data-view="integrations" title="Integraciones">
+          <span class="nav-icon" aria-hidden="true">⌘</span><span>Integraciones</span>
+        </button>
       </nav>
 
       <div class="sidebar-foot">
@@ -112,6 +118,7 @@
               <div><strong id="monitorTitle">Vista en vivo</strong><span id="monitorMeta">0 cámaras</span></div>
             </div>
             <div class="monitor-toolbar-actions">
+              <button id="monitorFullscreenBtn" class="button ghost" type="button" title="Pantalla completa" aria-label="Pantalla completa">⛶</button>
               <button id="singleViewBtn" class="button ghost" type="button">1 cámara</button>
               <button id="togglePickerBtn" class="button secondary" type="button">Cámaras</button>
             </div>
@@ -213,6 +220,96 @@
             <button id="eventsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
           </div>
           <div id="eventsList" class="events-list"></div>
+        </section>
+
+        <section id="sessionsView" class="app-view" hidden>
+          <div class="section-toolbar settings-toolbar">
+            <div><h2>Sesiones activas</h2><p>Dispositivos que mantienen acceso al visor.</p></div>
+            <button id="closeOtherSessionsBtn" class="button danger-solid" type="button">Cerrar las demás</button>
+          </div>
+          <div id="sessionsList" class="settings-list"></div>
+        </section>
+
+        <section id="integrationsView" class="app-view" hidden>
+          <div class="section-toolbar settings-toolbar">
+            <div><h2>Integraciones</h2><p>Módulos externos y automatizaciones.</p></div>
+          </div>
+          <div class="integration-grid">
+            <button id="telegramOpenBtn" class="integration-card" type="button">
+              <span class="integration-logo" aria-hidden="true">↗</span>
+              <span><strong>Telegram</strong><small id="telegramCardStatus">Sin configurar</small></span>
+              <span aria-hidden="true">›</span>
+            </button>
+          </div>
+
+          <section id="telegramPanel" class="integration-panel" hidden>
+            <div class="integration-panel-head">
+              <div><p class="eyebrow">TELEGRAM BOT</p><h2>Telegram</h2><p id="telegramSummary" class="hint">Conecta un bot para alertas y consultas remotas.</p></div>
+              <button id="telegramPanelCloseBtn" class="icon-button" type="button" aria-label="Cerrar configuración">×</button>
+            </div>
+
+            <div id="telegramLoading" class="integration-skeleton" hidden aria-hidden="true">
+              <div class="skeleton skeleton-line wide"></div>
+              <div class="skeleton skeleton-line medium"></div>
+              <div class="skeleton skeleton-field"></div>
+              <div class="skeleton skeleton-field short"></div>
+            </div>
+
+            <form id="telegramTokenForm" class="settings-form">
+              <label class="field">Token de BotFather
+                <input id="telegramToken" type="password" autocomplete="off" placeholder="123456:ABC…">
+              </label>
+              <p class="hint">El token se valida con Telegram antes de guardarse y queda cifrado en el servidor.</p>
+              <div id="telegramTokenError" class="form-error" role="alert"></div>
+              <button id="telegramSaveTokenBtn" class="button primary" type="submit">Validar y guardar</button>
+            </form>
+
+            <div id="telegramConfigured" hidden>
+              <div class="integration-identity">
+                <div><strong id="telegramBotName">Bot conectado</strong><span id="telegramBotMeta"></span></div>
+                <a id="telegramBotLink" class="button secondary" href="#" target="_blank" rel="noopener">Abrir bot</a>
+              </div>
+
+              <form id="telegramSettingsForm" class="settings-form">
+                <label class="settings-check"><input id="telegramNotificationsEnabled" type="checkbox"><span>Enviar alertas por detección/eventos</span></label>
+                <div class="form-row">
+                  <label class="field">Medio de la alerta
+                    <select id="telegramMediaMode">
+                      <option value="photo">Foto</option>
+                      <option value="video">Fragmento de vídeo</option>
+                    </select>
+                  </label>
+                  <label class="field">Duración del vídeo
+                    <input id="telegramVideoSeconds" type="number" min="3" max="10" value="5">
+                  </label>
+                </div>
+                <button id="telegramSaveSettingsBtn" class="button secondary" type="submit">Guardar opciones</button>
+              </form>
+
+              <div class="integration-block">
+                <div><strong>Vincular un chat</strong><p>Genera un código de 4 dígitos. Dura 10 minutos y se consume al usarlo.</p></div>
+                <button id="telegramGenerateCodeBtn" class="button primary" type="button">Generar código</button>
+              </div>
+              <div id="telegramCodeBox" class="telegram-code-box" hidden>
+                <strong id="telegramCodeValue" class="mono">0000</strong>
+                <span id="telegramCodeExpiry"></span>
+                <div class="telegram-code-actions">
+                  <a id="telegramDeepLink" class="button secondary" href="#" target="_blank" rel="noopener">Abrir Telegram</a>
+                </div>
+                <p id="telegramCodeCommands" class="mono"></p>
+              </div>
+
+              <div class="integration-block stacked">
+                <div><strong>Chats vinculados</strong><p>Estos chats pueden recibir alertas y pedir fotos o fragmentos.</p></div>
+                <div id="telegramChats" class="telegram-chat-list"></div>
+              </div>
+
+              <div class="danger-zone">
+                <div><strong>Eliminar integración</strong><p>Elimina el token, los códigos y los chats vinculados.</p></div>
+                <button id="telegramDeleteBtn" class="button danger-solid" type="button">Eliminar token</button>
+              </div>
+            </div>
+          </section>
         </section>
       </main>
     </div>

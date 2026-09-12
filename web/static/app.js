@@ -8,6 +8,8 @@ const state = {
   recordingDate: '',
   snapshotRevision: Date.now(),
   pendingPlayback: null,
+  sessions: [],
+  telegram: null,
   playback: { recording: null, offset: 0, startedAt: 0, timer: null, playing: false },
 };
 
@@ -52,6 +54,8 @@ const viewMeta = {
   monitor: { eyebrow: 'MONITOREO', title: 'Multivista', subtitle: 'Vista en vivo.' },
   recordings: { eyebrow: 'ARCHIVO', title: 'Grabaciones', subtitle: 'Historial de vídeo por cámara.' },
   events: { eyebrow: 'ACTIVIDAD', title: 'Eventos', subtitle: 'Movimiento y eventos recientes.' },
+  sessions: { eyebrow: 'SEGURIDAD', title: 'Sesiones', subtitle: 'Accesos persistentes al visor.' },
+  integrations: { eyebrow: 'MÓDULOS', title: 'Integraciones', subtitle: 'Servicios externos y automatizaciones.' },
 };
 
 const routePathByView = {
@@ -59,6 +63,8 @@ const routePathByView = {
   monitor: '/multivista',
   recordings: '/grabaciones',
   events: '/eventos',
+  sessions: '/sesiones',
+  integrations: '/integraciones',
 };
 
 function setBrowserRoute(path, { replace = false } = {}) {
@@ -75,6 +81,8 @@ function parseCurrentRoute() {
   if (path === '/multivista') return { view: 'monitor' };
   if (path === '/grabaciones') return { view: 'recordings', clearRecordingCamera: true };
   if (path === '/eventos') return { view: 'events' };
+  if (path === '/sesiones') return { view: 'sessions' };
+  if (path === '/integraciones') return { view: 'integrations' };
 
   if (path.startsWith('/camara/')) {
     const cameraID = path.slice('/camara/'.length);
@@ -268,7 +276,11 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   if (!viewMeta[view]) return;
   if (state.currentView === 'monitor' && view !== 'monitor') stopMonitorStreams();
   if (state.currentView === 'recordings' && view !== 'recordings') stopRecordingPlayback();
-  if (view !== 'monitor') monitorPicker.classList.remove('open');
+  if (view !== 'monitor') {
+    monitorPicker.classList.remove('open');
+    appView.classList.remove('theater-mode');
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
   state.currentView = view;
   appView.dataset.view = view;
 
@@ -291,6 +303,8 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   }
   if (view === 'recordings') loadRecordings();
   if (view === 'events') refreshEvents(false);
+  if (view === 'sessions') loadSessions();
+  if (view === 'integrations') loadTelegramStatus();
 }
 
 loginForm.addEventListener('submit', async (event) => {
@@ -345,8 +359,77 @@ $('#logoutMobileBtn').addEventListener('click', logout);
 
 bootRetryBtn.addEventListener('click', bootstrap);
 
+function skeletonMarkup(lines = 2) {
+  const widths = ['wide', 'medium', 'short'];
+  return Array.from({ length: lines }, (_, index) => `<span class="skeleton skeleton-line ${widths[index % widths.length]}"></span>`).join('');
+}
+
+function renderCameraSkeletons(count = 4) {
+  emptyState.hidden = true;
+  cameraCount.textContent = '…';
+  cameraGrid.innerHTML = Array.from({ length: count }, () => `
+    <article class="camera-thumb-card skeleton-card" aria-hidden="true">
+      <div class="skeleton skeleton-media"></div>
+      <div class="skeleton-card-copy">${skeletonMarkup(2)}</div>
+    </article>`).join('');
+}
+
+function renderSessionSkeletons(count = 3) {
+  const list = $('#sessionsList');
+  list.innerHTML = Array.from({ length: count }, () => `
+    <article class="session-card skeleton-session" aria-hidden="true">
+      <span class="skeleton skeleton-avatar"></span>
+      <div class="skeleton-copy">${skeletonMarkup(3)}</div>
+    </article>`).join('');
+}
+
+function renderEventSkeletons(count = 4) {
+  const list = $('#eventsList');
+  list.innerHTML = Array.from({ length: count }, () => `
+    <article class="event-card skeleton-event" aria-hidden="true">
+      <span class="skeleton skeleton-event-thumb"></span>
+      <div class="skeleton-copy">${skeletonMarkup(3)}</div>
+    </article>`).join('');
+}
+
+function renderRecordingSkeletons() {
+  const cameras = $('#recordingCameraList');
+  cameras.innerHTML = Array.from({ length: 3 }, () => `<div class="recording-camera-item skeleton-recording-camera" aria-hidden="true">${skeletonMarkup(2)}</div>`).join('');
+  const loading = $('#recordingsLoading');
+  loading.innerHTML = `
+    <div class="recordings-skeleton" aria-hidden="true">
+      <div class="skeleton skeleton-line medium"></div>
+      <div class="skeleton skeleton-timeline"></div>
+      <div class="recording-grid skeleton-recording-grid">
+        ${Array.from({ length: 4 }, () => `<div class="recording-card skeleton-card"><div class="skeleton skeleton-media"></div><div class="skeleton-card-copy">${skeletonMarkup(2)}</div></div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderDiscoverySkeletons(count = 4) {
+  const list = $('#discoveryList');
+  list.innerHTML = Array.from({ length: count }, () => `
+    <div class="discovery-item skeleton-discovery" aria-hidden="true">
+      <div class="skeleton-copy">${skeletonMarkup(2)}</div>
+      <span class="skeleton skeleton-button"></span>
+    </div>`).join('');
+}
+
+function renderLoadError(container, title, message) {
+  container.replaceChildren();
+  const box = document.createElement('div');
+  box.className = 'placeholder-panel compact-placeholder';
+  const heading = document.createElement('h2');
+  heading.textContent = title;
+  const copy = document.createElement('p');
+  copy.textContent = message;
+  box.append(heading, copy);
+  container.append(box);
+}
+
 async function refreshAll() {
   try {
+    if (state.currentView === 'cameras' && !state.cameras.length) renderCameraSkeletons();
     const cameras = await api('/api/cameras');
     state.cameras = cameras || [];
     state.monitorSelected = state.monitorSelected.filter(id => state.cameras.some(camera => camera.id === id));
@@ -356,6 +439,10 @@ async function refreshAll() {
     setStatus('Servicio activo', true);
   } catch (error) {
     if (error instanceof SessionRequiredError) return;
+    if ($('.skeleton-card', cameraGrid)) {
+      cameraCount.textContent = '0';
+      renderLoadError(cameraGrid, 'No se pudieron cargar las cámaras', error.message);
+    }
     setStatus(error.message, false);
   }
 }
@@ -378,7 +465,10 @@ function cameraFingerprint(cameras) {
 async function refreshCamerasRealtime() {
   try {
     const cameras = await api('/api/cameras') || [];
-    if (cameraFingerprint(cameras) === cameraFingerprint(state.cameras)) return;
+    if (cameraFingerprint(cameras) === cameraFingerprint(state.cameras)) {
+      if (state.currentView === 'integrations' && !$('#telegramPanel').hidden) loadTelegramStatus();
+      return;
+    }
 
     const previousSelection = state.monitorSelected.join('|');
     state.cameras = cameras;
@@ -389,6 +479,7 @@ async function refreshCamerasRealtime() {
     renderPicker();
     if (state.currentView === 'monitor' && selectionChanged) renderMonitor();
     if (state.currentView === 'recordings') renderRecordingCameraList();
+    if (state.currentView === 'integrations' && !$('#telegramPanel').hidden) loadTelegramStatus();
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
   }
@@ -419,6 +510,7 @@ function renderCameras() {
   for (const camera of cameras) {
     const fragment = $('#cameraCardTemplate').content.cloneNode(true);
     const card = $('.camera-thumb-card', fragment);
+    card.classList.add('loading');
     const mediaButton = $('.camera-thumb-media', card);
     const image = $('.camera-thumb-image', card);
     const fallback = $('.camera-thumb-fallback', card);
@@ -437,12 +529,14 @@ function renderCameras() {
 
     image.alt = `Vista previa de ${camera.name}`;
     image.addEventListener('load', () => {
+      card.classList.remove('loading');
       fallback.hidden = true;
       image.hidden = false;
       statusChip.classList.remove('offline');
       statusText.textContent = 'EN LÍNEA';
     });
     image.addEventListener('error', () => {
+      card.classList.remove('loading');
       image.hidden = true;
       fallback.hidden = false;
       statusChip.classList.add('offline');
@@ -558,6 +652,34 @@ function fitMonitorStage() {
   monitorStage.style.height = `${Math.max(1, Math.floor(height))}px`;
 }
 
+async function toggleMonitorFullscreen() {
+  const target = $('#monitorView');
+  if (!target) return;
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+    if (target.requestFullscreen) {
+      await target.requestFullscreen();
+      return;
+    }
+  } catch (_) {}
+  appView.classList.toggle('theater-mode');
+  syncFullscreenUI();
+}
+
+function syncFullscreenUI() {
+  const active = Boolean(document.fullscreenElement) || appView.classList.contains('theater-mode');
+  const button = $('#monitorFullscreenBtn');
+  if (button) {
+    button.textContent = active ? '⛶' : '⛶';
+    button.title = active ? 'Salir de pantalla completa' : 'Pantalla completa';
+    button.setAttribute('aria-label', button.title);
+  }
+  requestAnimationFrame(fitMonitorStage);
+}
+
 function createMonitorPane(camera, lowBandwidth) {
   const fragment = $('#monitorPaneTemplate').content.cloneNode(true);
   const pane = $('.monitor-pane', fragment);
@@ -613,8 +735,7 @@ function renderMonitor() {
   for (const pane of $$('.monitor-pane', monitorStage)) {
     if (wanted.has(pane.dataset.cameraId)) continue;
     $('.monitor-live-image', pane)?.removeAttribute('src');
-    pane.classList.add('leaving');
-    setTimeout(() => pane.remove(), 150);
+    pane.remove();
   }
 
   const existing = new Map($$('.monitor-pane', monitorStage).map(pane => [pane.dataset.cameraId, pane]));
@@ -723,6 +844,7 @@ async function loadRecordings() {
   const loading = $('#recordingsLoading');
   const empty = $('#recordingsEmpty');
   const workspace = $('#recordingsWorkspace');
+  renderRecordingSkeletons();
   loading.hidden = false;
   empty.hidden = true;
   $('h2', empty).textContent = 'No hay grabaciones almacenadas';
@@ -867,7 +989,7 @@ function renderRecordingCards(recordings) {
     card.classList.toggle('active', state.playback.recording?.name === recording.name && state.playback.recording?.camera_id === recording.camera_id);
     const preview = document.createElement('button');
     preview.type = 'button';
-    preview.className = 'recording-preview';
+    preview.className = 'recording-preview loading';
     const image = document.createElement('img');
     const fallback = document.createElement('div');
     const play = document.createElement('span');
@@ -879,7 +1001,8 @@ function renderRecordingCards(recordings) {
     fallback.innerHTML = '<span aria-hidden="true">◫</span><strong>Sin miniatura</strong>';
     play.className = 'recording-card-play';
     play.innerHTML = '<i aria-hidden="true">▶</i>';
-    image.addEventListener('error', () => { image.hidden = true; fallback.hidden = false; });
+    image.addEventListener('load', () => preview.classList.remove('loading'));
+    image.addEventListener('error', () => { preview.classList.remove('loading'); image.hidden = true; fallback.hidden = false; });
     preview.append(image, fallback, play);
     if (recording.active) {
       const badge = document.createElement('span');
@@ -1022,12 +1145,16 @@ function toggleRecordingPlayback() {
 }
 
 async function refreshEvents(updateStatus = true) {
+  const list = $('#eventsList');
+  const shouldSkeleton = state.currentView === 'events' && !list.children.length;
+  if (shouldSkeleton) renderEventSkeletons();
   try {
     const events = await api('/api/events');
     renderEvents(events || []);
     if (updateStatus) setStatus('Eventos actualizados', true);
   } catch (error) {
     if (error instanceof SessionRequiredError) return;
+    if (shouldSkeleton) renderLoadError(list, 'No se pudieron cargar los eventos', error.message);
     if (updateStatus) setStatus(error.message, false);
   }
 }
@@ -1048,8 +1175,9 @@ function eventCameraSnapshotURL(event) {
 
 function loadEventThumbnail(image, event) {
   let attempt = 0;
+  const finishLoading = () => image.closest('.event-thumb')?.classList.remove('loading');
   const fallback = () => {
-    image.onerror = null;
+    image.onerror = finishLoading;
     image.src = eventCameraSnapshotURL(event);
   };
   if (!event.recording_name) {
@@ -1092,10 +1220,11 @@ function createEventCard(event) {
   }
 
   const thumb = document.createElement('div');
-  thumb.className = 'event-thumb';
+  thumb.className = 'event-thumb loading';
   const image = document.createElement('img');
   image.alt = `Evento de ${event.camera_name}`;
   image.loading = 'lazy';
+  image.addEventListener('load', () => thumb.classList.remove('loading'));
   thumb.append(image);
   loadEventThumbnail(image, event);
 
@@ -1159,16 +1288,299 @@ function renderEvents(events) {
   });
 }
 
+function describeSessionDevice(userAgent) {
+  const ua = String(userAgent || '');
+  let browser = 'Navegador';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Safari\//i.test(ua)) browser = 'Safari';
+  let device = 'Equipo';
+  if (/Android/i.test(ua)) device = 'Android';
+  else if (/iPhone|iPad/i.test(ua)) device = 'iPhone/iPad';
+  else if (/Windows/i.test(ua)) device = 'Windows';
+  else if (/Macintosh/i.test(ua)) device = 'Mac';
+  else if (/Linux/i.test(ua)) device = 'Linux';
+  return `${browser} · ${device}`;
+}
+
+async function loadSessions() {
+  const list = $('#sessionsList');
+  renderSessionSkeletons();
+  $('#closeOtherSessionsBtn').disabled = true;
+  try {
+    state.sessions = await api('/api/sessions') || [];
+    renderSessions();
+  } catch (error) {
+    if (error instanceof SessionRequiredError) return;
+    list.innerHTML = '';
+    const errorBox = document.createElement('div');
+    errorBox.className = 'placeholder-panel';
+    errorBox.innerHTML = '<h2>No se pudieron cargar las sesiones</h2>';
+    const copy = document.createElement('p');
+    copy.textContent = error.message;
+    errorBox.append(copy);
+    list.append(errorBox);
+  }
+}
+
+function renderSessions() {
+  const list = $('#sessionsList');
+  list.replaceChildren();
+  const others = state.sessions.filter(session => !session.current);
+  $('#closeOtherSessionsBtn').disabled = others.length === 0;
+  if (!state.sessions.length) {
+    list.innerHTML = '<div class="placeholder-panel"><h2>Sin sesiones activas</h2><p>Vuelve a iniciar sesión.</p></div>';
+    return;
+  }
+  for (const session of state.sessions) {
+    const card = document.createElement('article');
+    card.className = `session-card${session.current ? ' current' : ''}`;
+    const icon = document.createElement('span');
+    icon.className = 'session-device-icon';
+    icon.textContent = /Android|iPhone|iPad/i.test(session.user_agent || '') ? '▯' : '▰';
+    const details = document.createElement('div');
+    details.className = 'session-details';
+    const title = document.createElement('div');
+    title.className = 'session-title';
+    const strong = document.createElement('strong');
+    strong.textContent = describeSessionDevice(session.user_agent);
+    title.append(strong);
+    if (session.current) {
+      const badge = document.createElement('span');
+      badge.className = 'status-badge';
+      badge.textContent = 'ACTUAL';
+      title.append(badge);
+    }
+    const meta = document.createElement('span');
+    meta.textContent = `${session.ip_address || 'IP local'} · actividad ${new Date(session.last_seen_at).toLocaleString()}`;
+    const expires = document.createElement('span');
+    expires.className = 'session-expiry';
+    expires.textContent = `Expira ${new Date(session.expires_at).toLocaleString()}`;
+    details.append(title, meta, expires);
+    card.append(icon, details);
+    if (!session.current) {
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'button ghost session-revoke';
+      revoke.textContent = 'Cerrar';
+      revoke.addEventListener('click', async () => {
+        revoke.disabled = true;
+        try {
+          await api(`/api/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+          await loadSessions();
+        } catch (error) {
+          if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+          revoke.disabled = false;
+        }
+      });
+      card.append(revoke);
+    }
+    list.append(card);
+  }
+}
+
+async function closeOtherSessions() {
+  const others = state.sessions.filter(session => !session.current);
+  if (!others.length) return;
+  const accepted = await confirmAction({
+    title: 'Cerrar las demás sesiones',
+    message: `Se cerrarán ${others.length} sesión(es) en otros dispositivos. Esta sesión permanecerá activa.`,
+    confirmLabel: 'Cerrar las demás',
+  });
+  if (!accepted) return;
+  const button = $('#closeOtherSessionsBtn');
+  button.disabled = true;
+  try {
+    const result = await api('/api/sessions/others', { method: 'DELETE' });
+    setStatus(`${result?.deleted || 0} sesión(es) cerradas`, true);
+    await loadSessions();
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadTelegramStatus({ skeleton = state.telegram === null } = {}) {
+  const loading = $('#telegramLoading');
+  if (skeleton) {
+    $('#telegramCardStatus').textContent = 'Consultando…';
+    $('#telegramCardStatus').classList.add('skeleton-text');
+    if (!$('#telegramPanel').hidden) {
+      loading.hidden = false;
+      $('#telegramTokenForm').hidden = true;
+      $('#telegramConfigured').hidden = true;
+    }
+  }
+  try {
+    state.telegram = await api('/api/integrations/telegram');
+    renderTelegramStatus();
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) {
+      $('#telegramCardStatus').textContent = 'No disponible';
+      $('#telegramSummary').textContent = error.message;
+      $('#telegramTokenForm').hidden = true;
+      $('#telegramConfigured').hidden = true;
+      setStatus(error.message, false);
+    }
+  } finally {
+    loading.hidden = true;
+    $('#telegramCardStatus').classList.remove('skeleton-text');
+  }
+}
+
+function renderTelegramStatus() {
+  const data = state.telegram || { configured: false, media_mode: 'photo', video_seconds: 5, chats: [] };
+  $('#telegramCardStatus').textContent = data.configured ? `@${data.bot_username}` : 'Sin configurar';
+  $('#telegramTokenForm').hidden = Boolean(data.configured);
+  $('#telegramConfigured').hidden = !data.configured;
+  $('#telegramSummary').textContent = data.configured
+    ? `Bot @${data.bot_username} conectado.`
+    : 'Conecta un bot para alertas y consultas remotas.';
+  if (!data.configured) return;
+  $('#telegramBotName').textContent = `@${data.bot_username}`;
+  $('#telegramBotMeta').textContent = `ID ${data.bot_id}`;
+  $('#telegramBotLink').href = data.bot_url || '#';
+  $('#telegramNotificationsEnabled').checked = Boolean(data.notifications_enabled);
+  $('#telegramMediaMode').value = data.media_mode || 'photo';
+  $('#telegramVideoSeconds').value = String(data.video_seconds || 5);
+  syncTelegramMediaFields();
+  renderTelegramChats(data.chats || []);
+}
+
+function renderTelegramChats(chats) {
+  const list = $('#telegramChats');
+  list.replaceChildren();
+  if (!chats.length) {
+    const empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.textContent = 'Todavía no hay chats vinculados.';
+    list.append(empty);
+    return;
+  }
+  for (const chat of chats) {
+    const item = document.createElement('div');
+    item.className = 'telegram-chat-item';
+    const details = document.createElement('div');
+    const strong = document.createElement('strong');
+    const meta = document.createElement('span');
+    strong.textContent = chat.chat_name || `Chat ${chat.chat_id}`;
+    meta.textContent = `Vinculado ${new Date(chat.linked_at).toLocaleString()}`;
+    details.append(strong, meta);
+    const badge = document.createElement('span');
+    badge.className = 'status-badge';
+    badge.textContent = chat.enabled ? 'ACTIVO' : 'PAUSADO';
+    item.append(details, badge);
+    list.append(item);
+  }
+}
+
+function syncTelegramMediaFields() {
+  $('#telegramVideoSeconds').disabled = $('#telegramMediaMode').value !== 'video';
+}
+
+async function saveTelegramToken(event) {
+  event.preventDefault();
+  const token = $('#telegramToken').value.trim();
+  const errorBox = $('#telegramTokenError');
+  const button = $('#telegramSaveTokenBtn');
+  errorBox.textContent = '';
+  if (!token) {
+    errorBox.textContent = 'Escribe el token entregado por BotFather.';
+    return;
+  }
+  button.disabled = true;
+  button.textContent = 'Validando…';
+  try {
+    state.telegram = await api('/api/integrations/telegram', {
+      method: 'PUT',
+      body: JSON.stringify({ token, notifications_enabled: true, media_mode: 'photo', video_seconds: 5 }),
+    });
+    $('#telegramToken').value = '';
+    renderTelegramStatus();
+    setStatus('Bot de Telegram conectado', true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Validar y guardar';
+  }
+}
+
+async function saveTelegramSettings(event) {
+  event.preventDefault();
+  const button = $('#telegramSaveSettingsBtn');
+  button.disabled = true;
+  try {
+    state.telegram = await api('/api/integrations/telegram', {
+      method: 'PUT',
+      body: JSON.stringify({
+        token: '',
+        notifications_enabled: $('#telegramNotificationsEnabled').checked,
+        media_mode: $('#telegramMediaMode').value,
+        video_seconds: Number($('#telegramVideoSeconds').value) || 5,
+      }),
+    });
+    renderTelegramStatus();
+    setStatus('Opciones de Telegram guardadas', true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function generateTelegramCode() {
+  const button = $('#telegramGenerateCodeBtn');
+  button.disabled = true;
+  try {
+    const result = await api('/api/integrations/telegram/code', { method: 'POST', body: '{}' });
+    $('#telegramCodeValue').textContent = result.code;
+    $('#telegramCodeExpiry').textContent = `Válido hasta ${new Date(result.expires_at).toLocaleTimeString()}`;
+    $('#telegramDeepLink').href = result.deep_link;
+    $('#telegramCodeCommands').textContent = (result.commands || []).join('   ·   ');
+    $('#telegramCodeBox').hidden = false;
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteTelegramIntegration() {
+  const accepted = await confirmAction({
+    title: 'Eliminar Telegram',
+    message: 'Se eliminarán el token cifrado, los códigos temporales y todos los chats vinculados.',
+    confirmLabel: 'Eliminar integración',
+  });
+  if (!accepted) return;
+  const button = $('#telegramDeleteBtn');
+  button.disabled = true;
+  try {
+    await api('/api/integrations/telegram', { method: 'DELETE' });
+    state.telegram = { configured: false, media_mode: 'photo', video_seconds: 5, chats: [] };
+    $('#telegramCodeBox').hidden = true;
+    renderTelegramStatus();
+    setStatus('Integración Telegram eliminada', true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function discover() {
   const button = $('#discoverBtn');
   const status = $('#discoveryStatus');
   const list = $('#discoveryList');
   button.disabled = true;
-  list.replaceChildren();
+  renderDiscoverySkeletons();
   status.textContent = 'Buscando cámaras ONVIF en la red local…';
   discoveryDialog.showModal();
   try {
     const devices = await api('/api/discover', { method: 'POST', body: '{}' });
+    list.replaceChildren();
     if (!devices.length) {
       status.textContent = 'No se detectaron dispositivos. Puedes agregar uno manualmente.';
       return;
@@ -1204,6 +1616,7 @@ async function discover() {
       list.append(item);
     }
   } catch (error) {
+    list.replaceChildren();
     if (!(error instanceof SessionRequiredError)) status.textContent = error.message;
   } finally {
     button.disabled = false;
@@ -1296,6 +1709,19 @@ $('#emptyAddBtn').addEventListener('click', () => cameraDialog.showModal());
 $('#discoverBtn').addEventListener('click', discover);
 $('#emptyDiscoverBtn').addEventListener('click', discover);
 $('#eventsRefreshBtn').addEventListener('click', () => refreshEvents(true));
+$('#closeOtherSessionsBtn').addEventListener('click', closeOtherSessions);
+$('#telegramOpenBtn').addEventListener('click', async () => {
+  $('#telegramPanel').hidden = false;
+  await loadTelegramStatus();
+  $('#telegramPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+$('#telegramPanelCloseBtn').addEventListener('click', () => { $('#telegramPanel').hidden = true; });
+$('#telegramTokenForm').addEventListener('submit', saveTelegramToken);
+$('#telegramSettingsForm').addEventListener('submit', saveTelegramSettings);
+$('#telegramGenerateCodeBtn').addEventListener('click', generateTelegramCode);
+$('#telegramDeleteBtn').addEventListener('click', deleteTelegramIntegration);
+$('#telegramMediaMode').addEventListener('change', syncTelegramMediaFields);
+$('#monitorFullscreenBtn').addEventListener('click', toggleMonitorFullscreen);
 $('#backToCamerasBtn').addEventListener('click', () => navigate('cameras'));
 $('#singleViewBtn').addEventListener('click', () => {
   if (state.monitorSelected.length > 1) state.monitorSelected = [state.monitorSelected[0]];
@@ -1354,6 +1780,14 @@ window.addEventListener('popstate', () => {
 window.addEventListener('resize', () => {
   if (!appView.hidden && state.currentView === 'monitor') fitMonitorStage();
 });
+
+document.addEventListener('fullscreenchange', syncFullscreenUI);
+if ('ResizeObserver' in window) {
+  const monitorResizeObserver = new ResizeObserver(() => {
+    if (!appView.hidden && state.currentView === 'monitor') fitMonitorStage();
+  });
+  if (monitorStage.parentElement) monitorResizeObserver.observe(monitorStage.parentElement);
+}
 
 window.addEventListener('beforeunload', () => {
   stopMonitorStreams();

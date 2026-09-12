@@ -23,9 +23,9 @@ func (m *Manager) Live(w http.ResponseWriter, r *http.Request, cameraID, streamU
 	defer m.releaseViewer(cameraID)
 
 	lowBandwidth := strings.EqualFold(r.URL.Query().Get("quality"), "low")
-	if lowBandwidth {
-		streamURI = motionStreamURI(streamURI)
-	}
+	// Mantener el mismo stream evita cambios de relación de aspecto al agregar
+	// una cámara a multivista. El perfil ligero reduce FPS/resolución después
+	// de decodificar, sin cambiar al substream del firmware.
 	filter := "fps=8,scale=960:-2:force_original_aspect_ratio=decrease"
 	quality := "5"
 	if lowBandwidth {
