@@ -143,6 +143,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.handleSnapshot)
 	a.mux.HandleFunc("GET /api/events", a.handleEvents)
 	a.mux.HandleFunc("GET /api/recordings", a.handleRecordings)
+	a.mux.HandleFunc("GET /api/recordings/storage", a.handleRecordingStorage)
 	a.mux.HandleFunc("POST /api/recordings/delete-batch", a.handleDeleteRecordingsBatch)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/metadata", a.handleRecordingMetadata)
 	a.mux.HandleFunc("DELETE /api/recordings/{cameraID}/{name}", a.handleDeleteRecording)

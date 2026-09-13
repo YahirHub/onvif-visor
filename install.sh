@@ -168,20 +168,33 @@ ensure_go() {
 }
 
 find_onnxruntime() {
-  for candidate in \
-    /usr/lib/libonnxruntime.so.1 \
-    /usr/local/lib/libonnxruntime.so.1 \
-    /usr/lib/libonnxruntime.so \
-    /usr/local/lib/libonnxruntime.so; do
-    if [ -e "$candidate" ]; then
+  if have ldconfig; then
+    candidate=$(ldconfig -p 2>/dev/null | awk '$1 ~ /^libonnxruntime\.so/ { print $NF; exit }')
+    if [ -n "${candidate:-}" ] && [ -e "$candidate" ]; then
       printf '%s\n' "$candidate"
       return 0
     fi
-  done
-  for candidate in /usr/lib/libonnxruntime.so.* /usr/local/lib/libonnxruntime.so.*; do
-    if [ -e "$candidate" ]; then
-      printf '%s\n' "$candidate"
-      return 0
+  fi
+
+  multiarch=""
+  if have gcc; then
+    multiarch=$(gcc -print-multiarch 2>/dev/null || true)
+  fi
+
+  for base in /usr/lib /usr/local/lib /usr/lib64 /usr/local/lib64 /lib /lib64; do
+    for candidate in "$base"/libonnxruntime.so.1 "$base"/libonnxruntime.so "$base"/libonnxruntime.so.*; do
+      if [ -e "$candidate" ]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+    if [ -n "$multiarch" ]; then
+      for candidate in "$base/$multiarch"/libonnxruntime.so.1 "$base/$multiarch"/libonnxruntime.so "$base/$multiarch"/libonnxruntime.so.*; do
+        if [ -e "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      done
     fi
   done
   return 1
@@ -274,7 +287,7 @@ ensure_onnxruntime() {
   fi
 
   if is_musl; then
-    fail "No se encontró un paquete nativo de ONNX Runtime para este sistema musl. El paquete binario oficial de GitHub usa glibc y no se instalará de forma insegura."
+    fail "No se encontró un paquete nativo de ONNX Runtime para este sistema musl. En Alpine habilita el repositorio community que corresponda a tu versión y vuelve a ejecutar install.sh; no se instalará el tarball glibc oficial sobre musl."
   fi
 
   install_official_onnxruntime

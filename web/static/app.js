@@ -10,6 +10,8 @@ const state = {
   monitorSelected: [],
   recordingCameraID: '',
   recordingDate: '',
+  recordingStorage: { total_bytes: 0, file_count: 0 },
+  timelineZoom: 1,
   snapshotRevision: Date.now(),
   pendingPlayback: null,
   sessions: [],
@@ -858,7 +860,12 @@ async function loadRecordings() {
   $('p', empty).textContent = 'Activa la grabación por eventos en una cámara para que los clips aparezcan aquí.';
   workspace.hidden = true;
   try {
-    state.recordings = await api('/api/recordings') || [];
+    const [recordings, storage] = await Promise.all([
+      api('/api/recordings'),
+      api('/api/recordings/storage'),
+    ]);
+    state.recordings = recordings || [];
+    state.recordingStorage = storage || { total_bytes: 0, file_count: 0 };
     const cameraStillExists = state.cameras.some(camera => camera.id === state.recordingCameraID);
     if (!cameraStillExists) {
       const firstWithRecording = state.cameras.find(camera => state.recordings.some(recording => recording.camera_id === camera.id));
@@ -1024,8 +1031,12 @@ function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = fal
 function renderRecordingStats(recordings) {
   const size = recordings.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
   const duration = recordings.reduce((sum, recording) => sum + (Number(recording.duration_seconds) || 0), 0);
+  const totalBytes = Math.max(0, Number(state.recordingStorage?.total_bytes) || 0);
+  const totalFiles = Math.max(0, Number(state.recordingStorage?.file_count) || 0);
   $('#recordingCount').textContent = String(recordings.length);
   $('#recordingSize').textContent = formatBytes(size);
+  $('#recordingStorageTotal').textContent = formatBytes(totalBytes);
+  $('#recordingStorageMeta').textContent = `total guardado · ${totalFiles} ${totalFiles === 1 ? 'clip' : 'clips'}`;
   $('#recordingDuration').textContent = formatDuration(duration);
   updateRecordingDeleteAction();
 }
@@ -1110,6 +1121,10 @@ function updateRecordingDeleteAction() {
 function applyDeletedRecordings(cameraID, names) {
   const deleted = new Set(names || []);
   if (!deleted.size) return;
+  const removed = state.recordings.filter(recording => recording.camera_id === cameraID && deleted.has(recording.name));
+  const removedBytes = removed.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
+  state.recordingStorage.total_bytes = Math.max(0, (Number(state.recordingStorage.total_bytes) || 0) - removedBytes);
+  state.recordingStorage.file_count = Math.max(0, (Number(state.recordingStorage.file_count) || 0) - removed.length);
   state.recordings = state.recordings.filter(recording => recording.camera_id !== cameraID || !deleted.has(recording.name));
   state.personSegments = state.personSegments.filter(segment => segment.camera_id !== cameraID || !deleted.has(segment.recording_name));
   if (state.playback.recording?.camera_id === cameraID && deleted.has(state.playback.recording.name)) {
@@ -1190,6 +1205,147 @@ async function deleteAllRecordings() {
   await deleteRecordingsByFilter({ all: true, label: 'todas las grabaciones' }, $('#recordingsDeleteAllBtn'));
 }
 
+const TIMELINE_ZOOM_MIN = 1;
+const TIMELINE_ZOOM_MAX = 24;
+const timelinePointers = new Map();
+let timelinePinchStart = null;
+let timelineSuppressClickUntil = 0;
+
+function clampTimelineZoom(value) {
+  return Math.max(TIMELINE_ZOOM_MIN, Math.min(TIMELINE_ZOOM_MAX, Number(value) || TIMELINE_ZOOM_MIN));
+}
+
+function timelineTickMinutes() {
+  const zoom = state.timelineZoom;
+  if (zoom >= 16) return 15;
+  if (zoom >= 8) return 30;
+  if (zoom >= 4) return 60;
+  if (zoom >= 2) return 120;
+  return 240;
+}
+
+function timelineVisibleHoursLabel() {
+  const hours = 24 / state.timelineZoom;
+  const rounded = hours >= 10 ? Math.round(hours) : Math.round(hours * 10) / 10;
+  return `${rounded} h`;
+}
+
+function renderTimelineRuler() {
+  const ruler = $('#timelineRuler');
+  const canvas = $('#timelineCanvas');
+  if (!ruler || !canvas) return;
+  const stepMinutes = timelineTickMinutes();
+  canvas.style.setProperty('--timeline-grid-step', `${stepMinutes / (24 * 60) * 100}%`);
+  ruler.replaceChildren();
+  for (let minute = 0; minute <= 24 * 60; minute += stepMinutes) {
+    const tick = document.createElement('span');
+    const hour = Math.floor(minute / 60);
+    const minutePart = minute % 60;
+    tick.textContent = minute === 24 * 60
+      ? '24:00'
+      : `${String(hour).padStart(2, '0')}:${String(minutePart).padStart(2, '0')}`;
+    tick.style.left = `${minute / (24 * 60) * 100}%`;
+    if (minute === 0) tick.classList.add('first');
+    if (minute === 24 * 60) tick.classList.add('last');
+    ruler.append(tick);
+  }
+}
+
+function syncTimelineZoomUI() {
+  const canvas = $('#timelineCanvas');
+  if (!canvas) return;
+  state.timelineZoom = clampTimelineZoom(state.timelineZoom);
+  canvas.style.width = `${state.timelineZoom * 100}%`;
+  renderTimelineRuler();
+  const label = $('#timelineZoomLabel');
+  if (label) label.textContent = timelineVisibleHoursLabel();
+  const out = $('#timelineZoomOutBtn');
+  const inside = $('#timelineZoomInBtn');
+  if (out) out.disabled = state.timelineZoom <= TIMELINE_ZOOM_MIN + .001;
+  if (inside) inside.disabled = state.timelineZoom >= TIMELINE_ZOOM_MAX - .001;
+}
+
+function setTimelineZoom(value, anchorClientX = null) {
+  const viewport = $('#timelineViewport');
+  const canvas = $('#timelineCanvas');
+  if (!viewport || !canvas) return;
+  const nextZoom = clampTimelineZoom(value);
+  if (Math.abs(nextZoom - state.timelineZoom) < .001) return;
+
+  const rect = viewport.getBoundingClientRect();
+  const anchor = anchorClientX === null
+    ? viewport.clientWidth / 2
+    : Math.max(0, Math.min(viewport.clientWidth, anchorClientX - rect.left));
+  const oldWidth = Math.max(1, viewport.scrollWidth);
+  const relativePoint = (viewport.scrollLeft + anchor) / oldWidth;
+
+  state.timelineZoom = nextZoom;
+  syncTimelineZoomUI();
+  const newWidth = Math.max(1, viewport.scrollWidth);
+  viewport.scrollLeft = Math.max(0, relativePoint * newWidth - anchor);
+}
+
+function timelinePointerDistance(points) {
+  if (points.length < 2) return 0;
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+}
+
+function timelinePointerMidpoint(points) {
+  if (points.length < 2) return 0;
+  return (points[0].x + points[1].x) / 2;
+}
+
+function handleTimelinePointerDown(event) {
+  if (event.pointerType !== 'touch') return;
+  const viewport = $('#timelineViewport');
+  if (!viewport) return;
+  timelinePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  try { viewport.setPointerCapture(event.pointerId); } catch (_) {}
+  if (timelinePointers.size === 2) {
+    const points = [...timelinePointers.values()];
+    timelinePinchStart = {
+      distance: Math.max(1, timelinePointerDistance(points)),
+      zoom: state.timelineZoom,
+    };
+  }
+}
+
+function handleTimelinePointerMove(event) {
+  if (event.pointerType !== 'touch' || !timelinePointers.has(event.pointerId)) return;
+  const viewport = $('#timelineViewport');
+  if (!viewport) return;
+  const previous = timelinePointers.get(event.pointerId);
+  timelinePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const points = [...timelinePointers.values()];
+
+  if (points.length >= 2) {
+    if (!timelinePinchStart) {
+      timelinePinchStart = { distance: Math.max(1, timelinePointerDistance(points)), zoom: state.timelineZoom };
+    }
+    const distance = timelinePointerDistance(points);
+    if (distance > 0) {
+      event.preventDefault();
+      timelineSuppressClickUntil = Date.now() + 300;
+      setTimelineZoom(timelinePinchStart.zoom * distance / timelinePinchStart.distance, timelinePointerMidpoint(points));
+    }
+    return;
+  }
+
+  const dx = event.clientX - previous.x;
+  const dy = event.clientY - previous.y;
+  if (state.timelineZoom > TIMELINE_ZOOM_MIN && Math.abs(dx) > 1 && Math.abs(dx) > Math.abs(dy)) {
+    event.preventDefault();
+    timelineSuppressClickUntil = Date.now() + 250;
+    viewport.scrollLeft -= dx;
+  }
+}
+
+function handleTimelinePointerEnd(event) {
+  if (event.pointerType !== 'touch') return;
+  timelinePointers.delete(event.pointerId);
+  if (timelinePointers.size < 2) timelinePinchStart = null;
+}
+
 function selectedDateBounds() {
   const parts = String(state.recordingDate || '').split('-').map(Number);
   if (parts.length !== 3 || parts.some(value => !Number.isFinite(value))) return null;
@@ -1227,6 +1383,7 @@ function renderRecordingTimeline(recordings) {
   const timeline = $('#recordingTimeline');
   const clips = recordingsOnSelectedDate(recordings);
   const bounds = selectedDateBounds();
+  syncTimelineZoomUI();
   timeline.replaceChildren();
   $('#timelineEmpty').hidden = clips.length > 0;
   if (!bounds) return;
@@ -2231,6 +2388,41 @@ $('#recordingsDeleteAllBtn').addEventListener('click', deleteAllRecordings);
 $('#recordingDeleteScope').addEventListener('change', syncRecordingDeleteScope);
 $('#recordingDeleteFrom').addEventListener('change', updateRecordingDeleteAction);
 $('#recordingDeleteTo').addEventListener('change', updateRecordingDeleteAction);
+$('#timelineZoomOutBtn').addEventListener('click', () => setTimelineZoom(state.timelineZoom / 1.5));
+$('#timelineZoomInBtn').addEventListener('click', () => setTimelineZoom(state.timelineZoom * 1.5));
+$('#timelineZoomResetBtn').addEventListener('click', () => setTimelineZoom(TIMELINE_ZOOM_MIN));
+const timelineViewport = $('#timelineViewport');
+timelineViewport.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  const factor = Math.exp(-event.deltaY * .0025);
+  setTimelineZoom(state.timelineZoom * factor, event.clientX);
+}, { passive: false });
+timelineViewport.addEventListener('pointerdown', handleTimelinePointerDown);
+timelineViewport.addEventListener('pointermove', handleTimelinePointerMove);
+timelineViewport.addEventListener('pointerup', handleTimelinePointerEnd);
+timelineViewport.addEventListener('pointercancel', handleTimelinePointerEnd);
+timelineViewport.addEventListener('click', (event) => {
+  if (Date.now() >= timelineSuppressClickUntil) return;
+  event.preventDefault();
+  event.stopPropagation();
+}, true);
+timelineViewport.addEventListener('keydown', (event) => {
+  if (event.key === '+' || event.key === '=') {
+    event.preventDefault();
+    setTimelineZoom(state.timelineZoom * 1.5);
+  } else if (event.key === '-' || event.key === '_') {
+    event.preventDefault();
+    setTimelineZoom(state.timelineZoom / 1.5);
+  } else if (event.key === '0') {
+    event.preventDefault();
+    setTimelineZoom(TIMELINE_ZOOM_MIN);
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.preventDefault();
+    const direction = event.key === 'ArrowLeft' ? -1 : 1;
+    timelineViewport.scrollBy({ left: direction * Math.max(80, timelineViewport.clientWidth * .2), behavior: 'smooth' });
+  }
+});
 $('#recordingDate').addEventListener('change', (event) => {
   state.recordingDate = event.target.value;
   const recordings = recordingsForCamera(state.recordingCameraID);

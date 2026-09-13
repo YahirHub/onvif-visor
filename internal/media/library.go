@@ -33,6 +33,11 @@ type RecordingFile struct {
 	Active         bool      `json:"active"`
 }
 
+type RecordingStorageStats struct {
+	TotalBytes int64 `json:"total_bytes"`
+	FileCount  int   `json:"file_count"`
+}
+
 type durationCacheEntry struct {
 	SizeBytes      int64
 	ModifiedUnixNS int64
@@ -86,6 +91,35 @@ func (m *Manager) ListRecordings(cameraID string) ([]RecordingFile, error) {
 
 	sort.Slice(files, func(i, j int) bool { return files[i].StartedAt.After(files[j].StartedAt) })
 	return files, nil
+}
+
+func (m *Manager) RecordingStorageStats() (RecordingStorageStats, error) {
+	var stats RecordingStorageStats
+	err := filepath.WalkDir(m.recordingsDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) && path == m.recordingsDir {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".mkv" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		stats.TotalBytes += info.Size()
+		stats.FileCount++
+		return nil
+	})
+	if err != nil {
+		return RecordingStorageStats{}, fmt.Errorf("scan recordings storage: %w", err)
+	}
+	return stats, nil
 }
 
 func (m *Manager) RecordingMetadata(ctx context.Context, cameraID, name string) (RecordingFile, error) {

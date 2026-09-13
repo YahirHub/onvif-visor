@@ -300,6 +300,15 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, filtered)
 }
 
+func (a *App) handleRecordingStorage(w http.ResponseWriter, _ *http.Request) {
+	stats, err := a.media.RecordingStorageStats()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo calcular el almacenamiento de grabaciones")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
 func (a *App) handleRecordings(w http.ResponseWriter, r *http.Request) {
 	cameraID := strings.TrimSpace(r.URL.Query().Get("camera_id"))
 	cameras := a.store.List()

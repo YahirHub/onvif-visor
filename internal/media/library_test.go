@@ -135,3 +135,30 @@ func TestDeleteRecordingRejectsActiveAndDeletesClosed(t *testing.T) {
 		t.Fatal("duration cache was not invalidated")
 	}
 }
+
+func TestRecordingStorageStatsCountsAllMKVs(t *testing.T) {
+	root := t.TempDir()
+	m := &Manager{recordingsDir: root}
+	for _, item := range []struct {
+		path string
+		size int
+	}{
+		{path: filepath.Join(root, "camera-1", "a.mkv"), size: 5},
+		{path: filepath.Join(root, "camera-deleted", "b.MKV"), size: 7},
+		{path: filepath.Join(root, "camera-1", "ignore.mp4"), size: 11},
+	} {
+		if err := os.MkdirAll(filepath.Dir(item.path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(item.path, make([]byte, item.size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := m.RecordingStorageStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.FileCount != 2 || stats.TotalBytes != 12 {
+		t.Fatalf("stats = %#v, want 2 files / 12 bytes", stats)
+	}
+}

@@ -28,7 +28,8 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Grabación con `-c copy` a MKV para evitar recodificación siempre que el stream sea compatible.
 - Biblioteca de grabaciones por cámara con cantidad, espacio usado y duración aproximada.
 - Miniaturas JPEG de grabaciones y eventos; si NanoDet encontró una persona, se usa preferentemente el frame de mayor confianza para que pueda reconocerse sin abrir el clip. Un evento asociado a un clip puede abrir la reproducción directamente en su segundo exacto.
-- Línea de tiempo de 24 horas filtrable por fecha; al reproducir un clip cerrado se consulta y cachea su duración real con `ffprobe` para que scrubber y contador terminen junto con el video.
+- Línea de tiempo de 24 horas filtrable por fecha y con zoom tipo editor/NVR: botones, `Ctrl`/`Cmd` + rueda o gesto de touchpad, pellizco en Android y desplazamiento horizontal. Puede ampliarse desde el día completo hasta aproximadamente 1 hora visible sin perder la referencia de las pistas Grabación/Personas. Al reproducir un clip cerrado se consulta y cachea su duración real con `ffprobe` para que scrubber y contador terminen junto con el video.
+- Resumen de almacenamiento que muestra tanto el espacio de la cámara seleccionada como el total real ocupado por todos los MKV guardados bajo `recordings/`, incluso si pertenecen a una cámara ya eliminada del catálogo.
 - Eliminación segura de grabaciones con modal: clip individual, día, semana, mes, mes anterior, rango personalizado o todos los clips cerrados de una cámara; nunca borra el archivo que sigue grabándose.
 - Analítica local de personas con **NanoDet-Plus-m 320** sobre ONNX Runtime: muestreo base de 1 FPS, una sola inferencia a la vez y sin enviar vídeo a servicios externos.
 - Backfill automático de grabaciones cerradas y detección incremental durante grabaciones activas/programadas; los resultados se guardan en `data/analytics.db`.
@@ -59,13 +60,13 @@ contexto/             bitácora Ponytail
 tareas/               tareas Ponytail
 ```
 
-La compilación principal usa `CGO_ENABLED=1` porque la analítica carga ONNX Runtime mediante su librería compartida. SQLite sigue siendo una implementación pura Go (`modernc.org/sqlite`), sin servicio externo. FFmpeg se usa para medios y para extraer frames 320x320 a 1 FPS; NanoDet hace la inferencia en CPU dentro del proceso del visor. Existe un build estático opcional con `CGO_ENABLED=0`, pero en ese binario la analítica NanoDet queda deshabilitada de forma segura. No se requiere Node.js, Python, PHP, nginx ni un servidor de base de datos.
+La compilación principal usa `CGO_ENABLED=1` porque la analítica carga ONNX Runtime mediante su librería compartida. El archivo `.onnx` contiene el grafo y pesos de NanoDet; `libonnxruntime.so` es el motor nativo que ejecuta ese modelo desde Go. SQLite sigue siendo una implementación pura Go (`modernc.org/sqlite`), sin servicio externo. FFmpeg muestrea vídeo a 1 FPS; en live reduce el frame conservando su relación de aspecto y Go crea aparte el letterbox 320x320 que consume NanoDet. Existe un build estático opcional con `CGO_ENABLED=0`, pero en ese binario la analítica NanoDet queda deshabilitada de forma segura. No se requiere Node.js, Python, PHP, nginx ni un servidor de base de datos.
 
 ## Requisitos
 
 - Go 1.24 o superior para compilar. El proyecto fue validado con Go 1.27.1.
 - FFmpeg accesible en `PATH` o indicado con `-ffmpeg`.
-- ONNX Runtime 1.x disponible como `libonnxruntime.so`/`libonnxruntime.so.1` para habilitar NanoDet. En el servidor DexOS/Alpine validado: `apk add --no-cache onnxruntime`.
+- ONNX Runtime 1.x disponible como `libonnxruntime.so`/`libonnxruntime.so.1` para habilitar NanoDet. En Alpine/musl, `install.sh` usa el paquete nativo `apk add --no-cache onnxruntime`, que instala la `.so` compatible con musl; deliberadamente no mezcla el tarball glibc de Microsoft. En distribuciones glibc intenta primero el paquete nativo mediante apt/dnf/yum/pacman/zypper y, si no existe, descarga el release oficial Linux x64/aarch64 de Microsoft. El instalador detecta la librería mediante `ldconfig`, rutas `lib`/`lib64` y directorios multiarch.
 - Cámara ONVIF accesible desde la misma red del host.
 - Para eventos nativos se usa ONVIF Events/PullPoint; si la cámara lo anuncia pero falla, el visor puede usar un detector local de movimiento sobre RTSP como respaldo.
 
@@ -96,7 +97,7 @@ make build-static
 
 ## Instalar como servicio
 
-La ruta recomendada desde el código fuente es `install.sh`. Detecta `apk`, `apt`, `dnf`, `yum`, `pacman` o `zypper`; instala compilador C, Go, Make, Git, curl, FFmpeg/ffprobe y certificados. Si el Go del sistema es anterior a 1.24 descarga una versión estable oficial desde `go.dev`. Para ONNX Runtime primero intenta el paquete nativo del sistema —obligatorio en musl/Alpine— y, en Linux glibc x86_64/aarch64, puede descargar automáticamente el release oficial más reciente de Microsoft. Después ejecuta `go test`, `go vet`, `make build` y finalmente `onvif-visor --install`.
+La ruta recomendada desde el código fuente es `install.sh`. Detecta `apk`, `apt`, `dnf`, `yum`, `pacman` o `zypper`; instala compilador C, Go, Make, Git, curl, FFmpeg/ffprobe y certificados. Si el Go del sistema es anterior a 1.24 descarga una versión estable oficial desde `go.dev`. Para ONNX Runtime primero busca una instalación existente con `ldconfig`, rutas `lib`/`lib64` y multiarch; después intenta el paquete nativo del sistema —obligatorio en musl/Alpine— y, en Linux glibc x86_64/aarch64, puede descargar automáticamente el release oficial más reciente de Microsoft. Después ejecuta `go test`, `go vet`, `make build` y finalmente `onvif-visor --install`.
 
 ```bash
 ./install.sh
@@ -183,7 +184,7 @@ Para una red no confiable se recomienda colocar TLS delante del servicio. El mod
 5. Usar **Detectar cámaras** o **Agregar cámara** para incorporar nuevos endpoints ONVIF.
 6. Activar **REC** en una tarjeta para grabar cuando haya movimiento/eventos.
 7. Usar el botón **◷** de la tarjeta para activar un horario, elegir días de la semana y definir hora inicial/final; los horarios que cruzan medianoche están soportados.
-8. Abrir **Grabaciones** para elegir una cámara, revisar sus clips, filtrar la fecha y usar la línea de tiempo. La pista **Personas** muestra los tramos que NanoDet va encontrando tanto en clips históricos como durante grabaciones activas.
+8. Abrir **Grabaciones** para elegir una cámara, revisar sus clips y filtrar la fecha. La cabecera muestra el espacio de la cámara y el total de vídeo almacenado. La línea de tiempo puede acercarse/alejarse con los botones `− / 24 h / +`, con `Ctrl`/`Cmd` + rueda o gesto de touchpad y con pellizco en Android; al ampliar, arrastra horizontalmente para recorrer el día. La pista **Personas** muestra los tramos que NanoDet va encontrando tanto en clips históricos como durante grabaciones activas.
 9. Pulsar una tarjeta, un bloque de grabación o un tramo de **Personas** para reproducir. Una detección de persona salta al segundo de mayor confianza del tramo; el scrubber permite buscar otro instante y el MKV original puede descargarse.
 10. Abrir **Eventos** para consultar movimiento y eventos recientes y saltar al instante de una grabación asociada.
 11. Abrir **Sesiones** para revisar accesos persistentes y cerrar todos los demás dispositivos sin perder la sesión actual.

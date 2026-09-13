@@ -171,7 +171,8 @@
                   <div><h2 id="recordingCameraTitle">Grabaciones</h2></div>
                   <div class="recording-stats">
                     <div><strong id="recordingCount">0</strong><span>clips</span></div>
-                    <div><strong id="recordingSize">0 MB</strong><span>espacio</span></div>
+                    <div><strong id="recordingSize">0 MB</strong><span>esta cámara</span></div>
+                    <div><strong id="recordingStorageTotal">0 B</strong><span id="recordingStorageMeta">total guardado</span></div>
                     <div><strong id="recordingDuration">0 min</strong><span>vídeo</span></div>
                   </div>
                 </div>
@@ -204,18 +205,25 @@
                     <div class="timeline-head-actions">
                       <span id="analyticsStatus" class="analytics-status">Analítica…</span>
                       <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
+                      <div class="timeline-zoom-controls" role="group" aria-label="Zoom de la línea de tiempo">
+                        <button id="timelineZoomOutBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Alejar línea de tiempo" title="Alejar">−</button>
+                        <button id="timelineZoomResetBtn" class="timeline-zoom-reset" type="button" title="Restablecer a 24 horas"><span id="timelineZoomLabel">24 h</span></button>
+                        <button id="timelineZoomInBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Acercar línea de tiempo" title="Acercar">+</button>
+                      </div>
                       <label class="date-filter"><span>Fecha</span><input id="recordingDate" type="date"></label>
                     </div>
                   </div>
-                  <div class="timeline-ruler" aria-hidden="true"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>
-                  <div class="timeline-track-row">
-                    <span class="timeline-track-label">Grabación</span>
-                    <div id="recordingTimeline" class="recording-timeline"></div>
+                  <div class="timeline-scroll-shell">
+                    <div class="timeline-label-column" aria-hidden="true"><span>Hora</span><span>Grabación</span><span>Personas</span></div>
+                    <div id="timelineViewport" class="timeline-viewport" tabindex="0" aria-label="Línea de tiempo. Usa pellizco, Control más rueda o los botones de zoom para acercar y arrastra horizontalmente para desplazarte.">
+                      <div id="timelineCanvas" class="timeline-canvas">
+                        <div id="timelineRuler" class="timeline-ruler" aria-hidden="true"></div>
+                        <div id="recordingTimeline" class="recording-timeline"></div>
+                        <div id="personTimeline" class="person-timeline" aria-label="Detecciones de personas"></div>
+                      </div>
+                    </div>
                   </div>
-                  <div class="timeline-track-row person-track-row">
-                    <span class="timeline-track-label">Personas</span>
-                    <div id="personTimeline" class="person-timeline" aria-label="Detecciones de personas"></div>
-                  </div>
+                  <p class="timeline-gesture-hint">Pellizca para ampliar · touchpad: Ctrl + gesto/rueda · desliza horizontalmente para recorrer el día.</p>
                   <p id="timelineEmpty" class="timeline-empty" hidden>No hay clips en esta fecha.</p>
                 </section>
 
