@@ -85,3 +85,34 @@ func TestResetAnalysesMarksCompletePending(t *testing.T) {
 		t.Fatal("reset analysis should be pending for reindex")
 	}
 }
+
+func TestDeleteRecordingRemovesAnalysisAndSegments(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	analysis := RecordingAnalysis{CameraID: "cam", RecordingName: "clip.mkv", SizeBytes: 100, ModifiedUnixNS: 20, DurationSecond: 10, Model: ModelName}
+	segments := []PersonSegment{{StartSecond: 1, EndSecond: 4, PeakSecond: 2, MaxConfidence: .9, Source: "offline"}}
+	if err := s.Complete(ctx, analysis, segments); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRecording(ctx, "cam", "clip.mkv"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Segments(ctx, "cam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("segments after delete = %#v", got)
+	}
+	needs, err := s.NeedsAnalysis(ctx, "cam", "clip.mkv", 100, 20, ModelName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needs {
+		t.Fatal("deleted analysis should no longer exist")
+	}
+}

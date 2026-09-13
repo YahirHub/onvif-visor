@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"net/url"
 	"os"
@@ -37,6 +39,12 @@ type CameraSource struct {
 	StreamURI string
 }
 
+type PersonFrame struct {
+	JPEG       []byte
+	DetectedAt time.Time
+	Confidence float64
+}
+
 type Status struct {
 	Enabled          bool    `json:"enabled"`
 	Ready            bool    `json:"ready"`
@@ -65,20 +73,22 @@ type Manager struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	ffmpeg   string
+	ffprobe  string
 	model    string
 	runtime  string
 	media    *media.Manager
 	store    *Store
 	detector Detector
 
-	inferMu sync.Mutex
-	mu      sync.Mutex
-	sources map[string]CameraSource
-	live    map[string]context.CancelFunc
-	queued  map[string]bool
-	status  Status
-	jobs    chan analysisJob
-	wg      sync.WaitGroup
+	inferMu      sync.Mutex
+	mu           sync.Mutex
+	sources      map[string]CameraSource
+	live         map[string]context.CancelFunc
+	queued       map[string]bool
+	personFrames map[string]PersonFrame
+	status       Status
+	jobs         chan analysisJob
+	wg           sync.WaitGroup
 }
 
 func New(cfg Config) (*Manager, error) {
@@ -93,11 +103,21 @@ func New(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	ffprobe := ""
+	if resolved, lookupErr := exec.LookPath(cfg.FFmpeg); lookupErr == nil {
+		sibling := filepath.Join(filepath.Dir(resolved), "ffprobe")
+		if info, statErr := os.Stat(sibling); statErr == nil && !info.IsDir() {
+			ffprobe = sibling
+		}
+	}
+	if ffprobe == "" {
+		ffprobe, _ = exec.LookPath("ffprobe")
+	}
 	m := &Manager{
-		ctx: ctx, cancel: cancel, ffmpeg: cfg.FFmpeg, model: cfg.ModelPath,
+		ctx: ctx, cancel: cancel, ffmpeg: cfg.FFmpeg, ffprobe: ffprobe, model: cfg.ModelPath,
 		runtime: ResolveRuntimePath(cfg.RuntimePath), media: cfg.Media, store: store,
 		sources: make(map[string]CameraSource), live: make(map[string]context.CancelFunc),
-		queued: make(map[string]bool), jobs: make(chan analysisJob, 128),
+		queued: make(map[string]bool), personFrames: make(map[string]PersonFrame), jobs: make(chan analysisJob, 128),
 		status: Status{Enabled: true, Model: ModelName, SampleFPS: 1},
 	}
 	detector, detectorErr := NewDetector(m.runtime, cfg.ModelPath)
@@ -147,6 +167,39 @@ func (m *Manager) Analyses(ctx context.Context, cameraID string) ([]RecordingAna
 	return m.store.Analyses(ctx, cameraID)
 }
 
+func (m *Manager) ForgetRecording(ctx context.Context, cameraID, recordingName string) error {
+	return m.store.DeleteRecording(ctx, cameraID, recordingName)
+}
+
+func (m *Manager) WaitForPersonFrame(ctx context.Context, cameraID string, notBefore time.Time) (PersonFrame, bool) {
+	check := func() (PersonFrame, bool) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		frame, ok := m.personFrames[cameraID]
+		if !ok || frame.DetectedAt.Before(notBefore) || len(frame.JPEG) == 0 {
+			return PersonFrame{}, false
+		}
+		copyFrame := frame
+		copyFrame.JPEG = append([]byte(nil), frame.JPEG...)
+		return copyFrame, true
+	}
+	if frame, ok := check(); ok {
+		return frame, true
+	}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return PersonFrame{}, false
+		case <-ticker.C:
+			if frame, ok := check(); ok {
+				return frame, true
+			}
+		}
+	}
+}
+
 func (m *Manager) SyncCamera(source CameraSource) {
 	if !m.Status().Ready || strings.TrimSpace(source.ID) == "" || strings.TrimSpace(source.StreamURI) == "" {
 		return
@@ -175,6 +228,7 @@ func (m *Manager) RemoveCamera(cameraID string) {
 		cancel()
 	}
 	delete(m.live, cameraID)
+	delete(m.personFrames, cameraID)
 	m.mu.Unlock()
 }
 
@@ -352,6 +406,11 @@ func (m *Manager) analyze(job analysisJob) {
 		// Cede CPU a live/recording en este servidor pequeño.
 		time.Sleep(10 * time.Millisecond)
 	}
+	if _, err := os.Stat(job.Path); errors.Is(err, os.ErrNotExist) {
+		_ = m.store.DeleteRecording(context.Background(), job.CameraID, job.RecordingName)
+		m.clearAnalyzing()
+		return
+	}
 	segments := MergeDetectionPoints(points, 3)
 	analysis := RecordingAnalysis{CameraID: job.CameraID, RecordingName: job.RecordingName, SizeBytes: job.SizeBytes, ModifiedUnixNS: job.ModifiedNS, DurationSecond: maxFloat(job.Duration, float64(frameIndex)), Status: "complete", ProgressSecond: float64(frameIndex), Model: ModelName, AnalyzedAt: time.Now().UTC()}
 	if err := m.store.Complete(m.ctx, analysis, segments); err != nil {
@@ -367,6 +426,37 @@ func (m *Manager) detect(frame []byte) (float32, bool, error) {
 		return 0, false, ErrInferenceUnavailable
 	}
 	return m.detector.DetectPerson(frame)
+}
+
+func (m *Manager) rememberPersonFrame(cameraID string, frame []byte, width, height int, confidence float32) {
+	jpegBytes, err := encodeBGRJPEG(frame, width, height)
+	if err != nil {
+		m.setLastError(err)
+		return
+	}
+	m.mu.Lock()
+	m.personFrames[cameraID] = PersonFrame{JPEG: jpegBytes, DetectedAt: time.Now().UTC(), Confidence: float64(confidence)}
+	m.mu.Unlock()
+}
+
+func encodeBGRJPEG(frame []byte, width, height int) ([]byte, error) {
+	if width <= 0 || height <= 0 || len(frame) != width*height*3 {
+		return nil, errors.New("invalid BGR frame for JPEG")
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for i := 0; i < width*height; i++ {
+		src := i * 3
+		dst := i * 4
+		img.Pix[dst] = frame[src+2]
+		img.Pix[dst+1] = frame[src+1]
+		img.Pix[dst+2] = frame[src]
+		img.Pix[dst+3] = 0xff
+	}
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, img, &jpeg.Options{Quality: 88}); err != nil {
+		return nil, fmt.Errorf("encode person frame JPEG: %w", err)
+	}
+	return output.Bytes(), nil
 }
 
 func (m *Manager) liveLoop(ctx context.Context, source CameraSource) {
@@ -389,7 +479,8 @@ func (m *Manager) liveLoop(ctx context.Context, source CameraSource) {
 }
 
 func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) error {
-	filter := fmt.Sprintf("fps=1,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=bgr24", InputWidth, InputHeight, InputWidth, InputHeight)
+	width, height := m.liveFrameDimensions(ctx, streamURI)
+	filter := fmt.Sprintf("fps=1,scale=%d:%d,format=bgr24", width, height)
 	cmd := exec.CommandContext(ctx, m.ffmpeg, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-threads", "1", "-i", streamURI, "-an", "-vf", filter, "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -400,7 +491,7 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	frame := make([]byte, frameSize)
+	frame := make([]byte, width*height*3)
 	for {
 		if _, err := io.ReadFull(stdout, frame); err != nil {
 			waitErr := cmd.Wait()
@@ -409,7 +500,8 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 			}
 			return fmt.Errorf("frame stream ended: %v: %s", waitErr, strings.TrimSpace(stderr.String()))
 		}
-		confidence, found, err := m.detect(frame)
+		modelFrame := letterboxBGR(frame, width, height, InputWidth, InputHeight)
+		confidence, found, err := m.detect(modelFrame)
 		if err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
@@ -418,6 +510,7 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 		if !found {
 			continue
 		}
+		m.rememberPersonFrame(cameraID, frame, width, height, confidence)
 		status := m.media.Status(cameraID)
 		if !status.Active || status.Path == "" || status.StartedAt.IsZero() {
 			continue
@@ -428,6 +521,65 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 		}
 		_ = m.store.UpsertLiveDetection(ctx, cameraID, filepath.Base(status.Path), offset, float64(confidence))
 	}
+}
+
+func (m *Manager) liveFrameDimensions(ctx context.Context, streamURI string) (int, int) {
+	if m.ffprobe == "" {
+		return InputWidth, 180
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, m.ffprobe,
+		"-v", "error",
+		"-rtsp_transport", "tcp",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height",
+		"-of", "csv=s=x:p=0",
+		streamURI,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return InputWidth, 180
+	}
+	var sourceWidth, sourceHeight int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%dx%d", &sourceWidth, &sourceHeight); err != nil {
+		return InputWidth, 180
+	}
+	return fitWithin(sourceWidth, sourceHeight, InputWidth, InputHeight)
+}
+
+func fitWithin(width, height, maxWidth, maxHeight int) (int, int) {
+	if width <= 0 || height <= 0 || maxWidth <= 0 || maxHeight <= 0 {
+		return maxWidth, maxHeight
+	}
+	if width*maxHeight >= height*maxWidth {
+		fittedHeight := (height*maxWidth + width/2) / width
+		if fittedHeight < 1 {
+			fittedHeight = 1
+		}
+		return maxWidth, fittedHeight
+	}
+	fittedWidth := (width*maxHeight + height/2) / height
+	if fittedWidth < 1 {
+		fittedWidth = 1
+	}
+	return fittedWidth, maxHeight
+}
+
+func letterboxBGR(frame []byte, width, height, targetWidth, targetHeight int) []byte {
+	if width <= 0 || height <= 0 || targetWidth <= 0 || targetHeight <= 0 || width > targetWidth || height > targetHeight || len(frame) != width*height*3 {
+		return nil
+	}
+	output := make([]byte, targetWidth*targetHeight*3)
+	offsetX := (targetWidth - width) / 2
+	offsetY := (targetHeight - height) / 2
+	rowBytes := width * 3
+	for y := 0; y < height; y++ {
+		srcStart := y * rowBytes
+		dstStart := ((y+offsetY)*targetWidth + offsetX) * 3
+		copy(output[dstStart:dstStart+rowBytes], frame[srcStart:srcStart+rowBytes])
+	}
+	return output
 }
 
 func analyticsStreamURI(streamURI string) string {
@@ -444,6 +596,11 @@ func analyticsStreamURI(streamURI string) string {
 }
 
 func (m *Manager) failJob(job analysisJob, err error) {
+	if _, statErr := os.Stat(job.Path); errors.Is(statErr, os.ErrNotExist) {
+		_ = m.store.DeleteRecording(context.Background(), job.CameraID, job.RecordingName)
+		m.clearAnalyzing()
+		return
+	}
 	_ = m.store.Fail(context.Background(), job.CameraID, job.RecordingName, ModelName, compactError(err))
 	m.setLastError(err)
 	m.clearAnalyzing()

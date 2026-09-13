@@ -201,6 +201,24 @@ func (s *Store) UpsertLiveDetection(ctx context.Context, cameraID, recordingName
 	return tx.Commit()
 }
 
+func (s *Store) DeleteRecording(ctx context.Context, cameraID, recordingName string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin analytics recording delete: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM person_segments WHERE camera_id=? AND recording_name=?`, cameraID, recordingName); err != nil {
+		return fmt.Errorf("delete person segments: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recording_analysis WHERE camera_id=? AND recording_name=?`, cameraID, recordingName); err != nil {
+		return fmt.Errorf("delete recording analysis: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit analytics recording delete: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) Segments(ctx context.Context, cameraID string) ([]PersonSegment, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, source FROM person_segments WHERE camera_id=? ORDER BY recording_name DESC, start_seconds ASC`, cameraID)
 	if err != nil {

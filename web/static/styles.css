@@ -436,6 +436,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 .recording-card-title { margin-bottom: .2rem; font-size: .68rem; }
 .recording-card-meta { display: flex; justify-content: space-between; gap: .45rem; color: #72808e; font-size: .57rem; }
 .recording-live-badge { position: absolute; top: .45rem; left: .45rem; padding: .2rem .36rem; border-radius: 5px; background: #a43a40; color: #fff; font-size: .52rem; font-weight: 800; letter-spacing: .05em; }
+.recording-person-badge { position: absolute; top: .45rem; right: .45rem; padding: .2rem .36rem; border-radius: 5px; background: rgba(31,111,78,.9); color: #e7fff1; font-size: .52rem; font-weight: 800; letter-spacing: .04em; }
 .recording-grid > .placeholder-panel { grid-column: 1 / -1; }
 
 /* Eventos */
@@ -823,4 +824,27 @@ select:focus { border-color: rgba(80,208,173,.55); box-shadow: 0 0 0 3px rgba(80
   .timeline-panel .timeline-ruler { margin-left: 54px; }
   .timeline-track-row { grid-template-columns: 46px minmax(0, 1fr); gap: 6px; }
   .timeline-track-label { font-size: .47rem; }
+}
+
+/* Retención y borrado de grabaciones */
+.button.danger { border-color: rgba(222,83,91,.34); background: rgba(164,58,64,.09); color: #e78389; }
+.button.danger:hover { border-color: rgba(222,83,91,.55); background: rgba(164,58,64,.18); color: #ff9ba1; }
+.recording-retention-bar { display: flex; align-items: flex-end; justify-content: space-between; gap: .7rem; margin: .15rem 0 .7rem; padding: .55rem; border: 1px solid rgba(148,163,184,.08); border-radius: 8px; background: #0b1015; }
+.recording-retention-filters { min-width: 0; display: flex; align-items: flex-end; gap: .45rem; flex-wrap: wrap; }
+.recording-retention-actions { display: flex; align-items: center; gap: .4rem; }
+.compact-field { display: grid; gap: .22rem; color: #6f7d8b; font-size: .54rem; }
+.compact-field select, .compact-field input { min-width: 156px; padding: .42rem .5rem; border-radius: 6px; font-size: .64rem; }
+.recording-delete-custom { display: flex; align-items: flex-end; gap: .4rem; }
+.recording-delete-custom[hidden] { display: none; }
+@media (max-width: 760px) {
+  .recording-retention-bar { align-items: stretch; flex-direction: column; }
+  .recording-retention-filters, .recording-delete-custom { width: 100%; }
+  .compact-field { flex: 1 1 150px; }
+  .compact-field select, .compact-field input { width: 100%; min-width: 0; }
+  .recording-retention-actions { width: 100%; }
+  .recording-retention-actions .button { flex: 1; justify-content: center; }
+}
+@media (max-width: 480px) {
+  .recording-player-actions #recordingDeleteBtn { display: inline-flex; }
+  .recording-delete-custom { flex-direction: column; align-items: stretch; }
 }

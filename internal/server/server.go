@@ -60,15 +60,17 @@ type App struct {
 }
 
 type CameraEvent struct {
-	CameraID        string            `json:"camera_id"`
-	CameraName      string            `json:"camera_name"`
-	Topic           string            `json:"topic"`
-	Time            time.Time         `json:"time"`
-	Source          map[string]string `json:"source,omitempty"`
-	Data            map[string]string `json:"data,omitempty"`
-	Triggered       bool              `json:"recording_trigger"`
-	RecordingName   string            `json:"recording_name,omitempty"`
-	RecordingOffset float64           `json:"recording_offset,omitempty"`
+	CameraID         string            `json:"camera_id"`
+	CameraName       string            `json:"camera_name"`
+	Topic            string            `json:"topic"`
+	Time             time.Time         `json:"time"`
+	Source           map[string]string `json:"source,omitempty"`
+	Data             map[string]string `json:"data,omitempty"`
+	Triggered        bool              `json:"recording_trigger"`
+	RecordingName    string            `json:"recording_name,omitempty"`
+	RecordingOffset  float64           `json:"recording_offset,omitempty"`
+	PersonOffset     float64           `json:"person_offset,omitempty"`
+	PersonConfidence float64           `json:"person_confidence,omitempty"`
 }
 
 type requestSessionKey struct{}
@@ -141,6 +143,9 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.handleSnapshot)
 	a.mux.HandleFunc("GET /api/events", a.handleEvents)
 	a.mux.HandleFunc("GET /api/recordings", a.handleRecordings)
+	a.mux.HandleFunc("POST /api/recordings/delete-batch", a.handleDeleteRecordingsBatch)
+	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/metadata", a.handleRecordingMetadata)
+	a.mux.HandleFunc("DELETE /api/recordings/{cameraID}/{name}", a.handleDeleteRecording)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/snapshot", a.handleRecordingSnapshot)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/play", a.handleRecordingPlayback)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/download", a.handleRecordingDownload)

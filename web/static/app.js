@@ -476,10 +476,7 @@ function cameraFingerprint(cameras) {
 async function refreshCamerasRealtime() {
   try {
     const cameras = await api('/api/cameras') || [];
-    if (cameraFingerprint(cameras) === cameraFingerprint(state.cameras)) {
-      if (state.currentView === 'integrations' && !$('#telegramPanel').hidden) loadTelegramStatus();
-      return;
-    }
+    if (cameraFingerprint(cameras) === cameraFingerprint(state.cameras)) return;
 
     const previousSelection = state.monitorSelected.join('|');
     state.cameras = cameras;
@@ -490,7 +487,6 @@ async function refreshCamerasRealtime() {
     renderPicker();
     if (state.currentView === 'monitor' && selectionChanged) renderMonitor();
     if (state.currentView === 'recordings') renderRecordingCameraList();
-    if (state.currentView === 'integrations' && !$('#telegramPanel').hidden) loadTelegramStatus();
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
   }
@@ -900,6 +896,13 @@ function recordingsForCamera(cameraID) {
   return state.recordings.filter(recording => recording.camera_id === cameraID);
 }
 
+function personSegmentsFingerprint(segments) {
+  return JSON.stringify((segments || []).map(segment => [
+    segment.id, segment.recording_name, segment.start_seconds, segment.end_seconds,
+    segment.peak_seconds, segment.max_confidence,
+  ]));
+}
+
 async function loadRecordingAnalytics({ silent = false } = {}) {
   if (state.analyticsLoading || !state.recordingCameraID) return;
   state.analyticsLoading = true;
@@ -909,10 +912,16 @@ async function loadRecordingAnalytics({ silent = false } = {}) {
       api('/api/analytics/status'),
       api(`/api/analytics/persons?camera_id=${cameraID}`),
     ]);
+    const nextSegments = segments || [];
+    const changed = personSegmentsFingerprint(nextSegments) !== personSegmentsFingerprint(state.personSegments);
     state.analyticsStatus = status;
-    state.personSegments = segments || [];
+    state.personSegments = nextSegments;
     renderAnalyticsStatus();
-    renderPersonTimeline(recordingsForCamera(state.recordingCameraID));
+    if (changed) {
+      const recordings = recordingsForCamera(state.recordingCameraID);
+      renderPersonTimeline(recordings);
+      renderRecordingCards(recordings);
+    }
   } catch (error) {
     if (!(error instanceof SessionRequiredError) && !silent) setStatus(error.message, false);
   } finally {
@@ -1018,6 +1027,167 @@ function renderRecordingStats(recordings) {
   $('#recordingCount').textContent = String(recordings.length);
   $('#recordingSize').textContent = formatBytes(size);
   $('#recordingDuration').textContent = formatDuration(duration);
+  updateRecordingDeleteAction();
+}
+
+function localDateFromKey(key) {
+  const parts = String(key || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some(value => !Number.isFinite(value))) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+}
+
+function addLocalDays(date, days) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days, 0, 0, 0, 0);
+}
+
+function recordingDeleteFilter() {
+  const scope = $('#recordingDeleteScope').value;
+  const selected = localDateFromKey(state.recordingDate) || new Date();
+  if (scope === 'all') return { all: true, label: 'todas las grabaciones' };
+  if (scope === 'day') {
+    return { all: false, from: selected, to: addLocalDays(selected, 1), label: `el día ${selected.toLocaleDateString()}` };
+  }
+  if (scope === 'week') {
+    const mondayOffset = (selected.getDay() + 6) % 7;
+    const from = addLocalDays(selected, -mondayOffset);
+    return { all: false, from, to: addLocalDays(from, 7), label: `la semana del ${from.toLocaleDateString()}` };
+  }
+  if (scope === 'month') {
+    const from = new Date(selected.getFullYear(), selected.getMonth(), 1);
+    const to = new Date(selected.getFullYear(), selected.getMonth() + 1, 1);
+    return { all: false, from, to, label: from.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
+  }
+  if (scope === 'previous-month') {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const to = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { all: false, from, to, label: `el mes anterior (${from.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })})` };
+  }
+  if (scope === 'custom') {
+    const from = localDateFromKey($('#recordingDeleteFrom').value);
+    const endDay = localDateFromKey($('#recordingDeleteTo').value);
+    if (!from || !endDay || endDay < from) return null;
+    return { all: false, from, to: addLocalDays(endDay, 1), label: `del ${from.toLocaleDateString()} al ${endDay.toLocaleDateString()}` };
+  }
+  return null;
+}
+
+function recordingsMatchingDeleteFilter(filter) {
+  const recordings = recordingsForCamera(state.recordingCameraID);
+  if (!filter) return [];
+  return recordings.filter(recording => {
+    if (recording.active) return false;
+    if (filter.all) return true;
+    const started = new Date(recording.started_at);
+    return Number.isFinite(started.getTime()) && started >= filter.from && started < filter.to;
+  });
+}
+
+function syncRecordingDeleteScope() {
+  const custom = $('#recordingDeleteScope').value === 'custom';
+  $('#recordingDeleteCustomRange').hidden = !custom;
+  if (custom) {
+    const fallback = state.recordingDate || localDateKey(new Date());
+    if (!$('#recordingDeleteFrom').value) $('#recordingDeleteFrom').value = fallback;
+    if (!$('#recordingDeleteTo').value) $('#recordingDeleteTo').value = fallback;
+  }
+  updateRecordingDeleteAction();
+}
+
+function updateRecordingDeleteAction() {
+  const button = $('#recordingsDeleteFilteredBtn');
+  const allButton = $('#recordingsDeleteAllBtn');
+  if (!button || !allButton) return;
+  const filter = recordingDeleteFilter();
+  const count = recordingsMatchingDeleteFilter(filter).length;
+  const allCount = recordingsMatchingDeleteFilter({ all: true }).length;
+  button.disabled = !state.recordingCameraID || !filter || count === 0;
+  button.textContent = count > 0 ? `Eliminar filtrados (${count})` : 'Eliminar filtrados';
+  allButton.disabled = !state.recordingCameraID || allCount === 0;
+  allButton.textContent = allCount > 0 ? `Eliminar todos (${allCount})` : 'Eliminar todos';
+}
+
+function applyDeletedRecordings(cameraID, names) {
+  const deleted = new Set(names || []);
+  if (!deleted.size) return;
+  state.recordings = state.recordings.filter(recording => recording.camera_id !== cameraID || !deleted.has(recording.name));
+  state.personSegments = state.personSegments.filter(segment => segment.camera_id !== cameraID || !deleted.has(segment.recording_name));
+  if (state.playback.recording?.camera_id === cameraID && deleted.has(state.playback.recording.name)) {
+    stopRecordingPlayback();
+    $('#recordingPlayer').hidden = true;
+  }
+  const recordings = recordingsForCamera(cameraID);
+  renderRecordingCameraList();
+  renderRecordingStats(recordings);
+  renderRecordingTimeline(recordings);
+  renderPersonTimeline(recordings);
+  renderRecordingCards(recordings);
+  refreshEvents(false);
+}
+
+async function deleteCurrentRecording() {
+  const recording = state.playback.recording;
+  if (!recording) return;
+  if (recording.active) {
+    setStatus('No se puede eliminar una grabación que todavía está activa.', false);
+    return;
+  }
+  const accepted = await confirmAction({
+    title: 'Eliminar grabación',
+    message: `Se eliminará permanentemente el video del ${new Date(recording.started_at).toLocaleString()} (${formatDuration(recording.duration_seconds)}). Esta acción no se puede deshacer.`,
+    confirmLabel: 'Eliminar video',
+  });
+  if (!accepted) return;
+  const button = $('#recordingDeleteBtn');
+  button.disabled = true;
+  try {
+    await api(recordingBaseURL(recording), { method: 'DELETE' });
+    applyDeletedRecordings(recording.camera_id, [recording.name]);
+    setStatus('Grabación eliminada', true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteRecordingsByFilter(filter, button) {
+  const matches = recordingsMatchingDeleteFilter(filter);
+  if (!filter || !matches.length) {
+    setStatus('No hay grabaciones cerradas que coincidan con ese filtro.', false);
+    return;
+  }
+  const camera = state.cameras.find(item => item.id === state.recordingCameraID);
+  const accepted = await confirmAction({
+    title: matches.length === 1 ? 'Eliminar 1 grabación' : `Eliminar ${matches.length} grabaciones`,
+    message: `Se eliminarán permanentemente ${matches.length} clips de ${camera?.name || 'esta cámara'} correspondientes a ${filter.label}. Esta acción no se puede deshacer.`,
+    confirmLabel: matches.length === 1 ? 'Eliminar video' : 'Eliminar videos',
+  });
+  if (!accepted) return;
+
+  button.disabled = true;
+  try {
+    const payload = filter.all
+      ? { camera_id: state.recordingCameraID, all: true }
+      : { camera_id: state.recordingCameraID, all: false, from: filter.from.toISOString(), to: filter.to.toISOString() };
+    const result = await api('/api/recordings/delete-batch', { method: 'POST', body: JSON.stringify(payload) });
+    applyDeletedRecordings(state.recordingCameraID, result.deleted || []);
+    const skipped = Number(result.skipped_active) || 0;
+    const suffix = skipped ? ` · ${skipped} activa${skipped === 1 ? '' : 's'} conservada${skipped === 1 ? '' : 's'}` : '';
+    setStatus(`${result.deleted_count || 0} grabaciones eliminadas${suffix}`, true);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
+  } finally {
+    updateRecordingDeleteAction();
+  }
+}
+
+async function deleteFilteredRecordings() {
+  await deleteRecordingsByFilter(recordingDeleteFilter(), $('#recordingsDeleteFilteredBtn'));
+}
+
+async function deleteAllRecordings() {
+  await deleteRecordingsByFilter({ all: true, label: 'todas las grabaciones' }, $('#recordingsDeleteAllBtn'));
 }
 
 function selectedDateBounds() {
@@ -1112,6 +1282,15 @@ function renderPersonTimeline(recordings) {
   }
 }
 
+function bestPersonSegmentForRecording(recording) {
+  let best = null;
+  for (const segment of state.personSegments) {
+    if (segment.camera_id !== recording.camera_id || segment.recording_name !== recording.name) continue;
+    if (!best || Number(segment.max_confidence) > Number(best.max_confidence)) best = segment;
+  }
+  return best;
+}
+
 function renderRecordingCards(recordings) {
   const list = $('#recordingList');
   list.replaceChildren();
@@ -1129,23 +1308,42 @@ function renderRecordingCards(recordings) {
     const card = document.createElement('article');
     card.className = 'recording-card';
     card.classList.toggle('active', state.playback.recording?.name === recording.name && state.playback.recording?.camera_id === recording.camera_id);
+    const personSegment = bestPersonSegmentForRecording(recording);
     const preview = document.createElement('button');
     preview.type = 'button';
     preview.className = 'recording-preview loading';
     const image = document.createElement('img');
     const fallback = document.createElement('div');
     const play = document.createElement('span');
-    image.alt = `Miniatura de grabación ${new Date(recording.started_at).toLocaleString()}`;
+    image.alt = personSegment
+      ? `Persona detectada en la grabación ${new Date(recording.started_at).toLocaleString()}`
+      : `Miniatura de grabación ${new Date(recording.started_at).toLocaleString()}`;
     image.loading = 'lazy';
-    image.src = recordingSnapshotURL(recording);
+    image.src = recordingSnapshotURL(recording, personSegment?.peak_seconds);
     fallback.className = 'recording-preview-fallback';
     fallback.hidden = true;
     fallback.innerHTML = '<span aria-hidden="true">◫</span><strong>Sin miniatura</strong>';
     play.className = 'recording-card-play';
     play.innerHTML = '<i aria-hidden="true">▶</i>';
+    let thumbnailFallbackTried = false;
     image.addEventListener('load', () => preview.classList.remove('loading'));
-    image.addEventListener('error', () => { preview.classList.remove('loading'); image.hidden = true; fallback.hidden = false; });
+    image.addEventListener('error', () => {
+      if (personSegment && !thumbnailFallbackTried) {
+        thumbnailFallbackTried = true;
+        image.src = recordingSnapshotURL(recording);
+        return;
+      }
+      preview.classList.remove('loading');
+      image.hidden = true;
+      fallback.hidden = false;
+    });
     preview.append(image, fallback, play);
+    if (personSegment) {
+      const badge = document.createElement('span');
+      badge.className = 'recording-person-badge';
+      badge.textContent = `PERSONA ${Math.round((Number(personSegment.max_confidence) || 0) * 100)}%`;
+      preview.append(badge);
+    }
     if (recording.active) {
       const badge = document.createElement('span');
       badge.className = 'recording-live-badge';
@@ -1176,11 +1374,15 @@ function recordingBaseURL(recording) {
   return `/api/recordings/${encodeURIComponent(recording.camera_id)}/${encodeURIComponent(recording.name)}`;
 }
 
-function recordingSnapshotURL(recording) {
-  return `${recordingBaseURL(recording)}/snapshot`;
+function recordingSnapshotURL(recording, offsetSeconds = null) {
+  if (offsetSeconds === null || offsetSeconds === undefined || !Number.isFinite(Number(offsetSeconds))) {
+    return `${recordingBaseURL(recording)}/snapshot`;
+  }
+  const offset = Math.max(0, Number(offsetSeconds) || 0);
+  return `${recordingBaseURL(recording)}/snapshot?at=${offset.toFixed(3)}`;
 }
 
-function selectRecording(recording, offset = 0) {
+async function selectRecording(recording, offset = 0) {
   const recordingStart = new Date(recording.started_at).getTime();
   const targetTime = Number.isFinite(recordingStart) ? new Date(recordingStart + Math.max(0, Number(offset) || 0) * 1000) : new Date(recording.started_at);
   state.recordingDate = localDateKey(targetTime);
@@ -1189,9 +1391,21 @@ function selectRecording(recording, offset = 0) {
   $('#recordingPlayerTitle').textContent = new Date(recording.started_at).toLocaleTimeString();
   $('#recordingPlayerDate').textContent = new Date(recording.started_at).toLocaleString();
   $('#recordingDownload').href = `${recordingBaseURL(recording)}/download`;
-  $('#recordingScrubber').max = String(Math.max(1, Number(recording.duration_seconds) || 1));
+  $('#recordingPlaybackLoading').hidden = false;
+
+  try {
+    const metadata = await api(`${recordingBaseURL(recording)}/metadata`);
+    if (metadata?.duration_seconds >= 0) Object.assign(recording, metadata);
+  } catch (error) {
+    if (error instanceof SessionRequiredError) return;
+    // Si ffprobe no está disponible el servidor conserva la duración aproximada;
+    // el playback sigue siendo utilizable en vez de bloquear al usuario.
+  }
+
+  $('#recordingScrubber').max = String(Math.max(.1, Number(recording.duration_seconds) || .1));
   $('#recordingTotalTime').textContent = formatClock(recording.duration_seconds);
   startRecordingPlayback(recording, offset);
+  renderRecordingStats(recordingsForCamera(recording.camera_id));
   renderRecordingTimeline(recordingsForCamera(recording.camera_id));
   renderPersonTimeline(recordingsForCamera(recording.camera_id));
   renderRecordingCards(recordingsForCamera(recording.camera_id));
@@ -1216,7 +1430,19 @@ function startRecordingPlayback(recording, offset = 0) {
   image.onload = () => { loading.hidden = true; errorBox.hidden = true; };
   image.onerror = async () => {
     loading.hidden = true;
-    if (state.playback.playing) errorBox.hidden = false;
+    if (state.playback.playing) {
+      const duration = Math.max(0, Number(state.playback.recording?.duration_seconds) || 0);
+      const current = currentPlaybackOffset();
+      state.playback.offset = duration > 0 ? Math.min(current, duration) : current;
+      state.playback.playing = false;
+      if (state.playback.timer !== null) clearInterval(state.playback.timer);
+      state.playback.timer = null;
+      $('#recordingPlayPause').textContent = 'Reproducir';
+      updatePlaybackUI(state.playback.offset);
+      // Un cierre al final del MJPEG no es un error visible; una interrupción
+      // claramente anterior al final sí se muestra como fallo de reproducción.
+      errorBox.hidden = duration > 0 && state.playback.offset >= Math.max(0, duration - .8);
+    }
     try {
       const session = await getSessionStatus();
       if (session.required && !session.authenticated) showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
@@ -1310,12 +1536,17 @@ function eventKey(event) {
 
 function eventRecordingSnapshotURL(event, attempt = 0) {
   if (!event.recording_name) return '';
-  const offset = Math.max(0, Number(event.recording_offset) || 0);
+  const hasPerson = Number(event.person_confidence) > 0;
+  const offset = Math.max(0, Number(hasPerson ? event.person_offset : event.recording_offset) || 0);
   return `/api/recordings/${encodeURIComponent(event.camera_id)}/${encodeURIComponent(event.recording_name)}/snapshot?at=${offset.toFixed(3)}&r=${attempt}`;
 }
 
 function eventCameraSnapshotURL(event) {
   return `/api/cameras/${encodeURIComponent(event.camera_id)}/snapshot?v=${encodeURIComponent(event.time || Date.now())}`;
+}
+
+function eventThumbnailFingerprint(event) {
+  return [event.recording_name || '', Number(event.person_offset) || 0, Number(event.person_confidence) || 0].join('|');
 }
 
 function loadEventThumbnail(image, event) {
@@ -1359,6 +1590,7 @@ function createEventCard(event) {
   if (card instanceof HTMLButtonElement) card.type = 'button';
   card.className = 'event-card event-enter';
   card.dataset.eventKey = eventKey(event);
+  card.dataset.thumbFingerprint = eventThumbnailFingerprint(event);
   if (event.recording_name) {
     card.classList.add('clickable');
     card.addEventListener('click', () => openEventRecording(event));
@@ -1422,7 +1654,21 @@ function renderEvents(events) {
 
   $('.placeholder-panel', list)?.remove();
   const existing = new Map($$('.event-card', list).map(card => [card.dataset.eventKey, card]));
-  const ordered = visible.map(event => existing.get(eventKey(event)) || createEventCard(event));
+  const ordered = visible.map(event => {
+    const card = existing.get(eventKey(event));
+    if (!card) return createEventCard(event);
+    const fingerprint = eventThumbnailFingerprint(event);
+    if (card.dataset.thumbFingerprint !== fingerprint) {
+      card.dataset.thumbFingerprint = fingerprint;
+      const image = $('img', card);
+      const thumb = $('.event-thumb', card);
+      if (image && thumb) {
+        thumb.classList.add('loading');
+        loadEventThumbnail(image, event);
+      }
+    }
+    return card;
+  });
   const wanted = new Set(ordered);
   for (const card of $$('.event-card', list)) {
     if (!wanted.has(card)) card.remove();
@@ -1708,7 +1954,9 @@ function renderTelegramChats(chats) {
 }
 
 function syncTelegramMediaFields() {
-  $('#telegramVideoSeconds').disabled = $('#telegramMediaMode').value !== 'video';
+  // El medio sólo afecta a las alertas automáticas. La duración también se usa
+  // como valor por defecto de /video, por lo que debe seguir editable en foto.
+  $('#telegramVideoSeconds').disabled = false;
 }
 
 async function saveTelegramToken(event) {
@@ -1977,11 +2225,18 @@ cameraSearch.addEventListener('input', renderCameras);
 pickerSearch.addEventListener('input', renderPicker);
 $('#recordingsRefreshBtn').addEventListener('click', loadRecordings);
 $('#analyticsReindexBtn').addEventListener('click', reindexAnalytics);
+$('#recordingDeleteBtn').addEventListener('click', deleteCurrentRecording);
+$('#recordingsDeleteFilteredBtn').addEventListener('click', deleteFilteredRecordings);
+$('#recordingsDeleteAllBtn').addEventListener('click', deleteAllRecordings);
+$('#recordingDeleteScope').addEventListener('change', syncRecordingDeleteScope);
+$('#recordingDeleteFrom').addEventListener('change', updateRecordingDeleteAction);
+$('#recordingDeleteTo').addEventListener('change', updateRecordingDeleteAction);
 $('#recordingDate').addEventListener('change', (event) => {
   state.recordingDate = event.target.value;
   const recordings = recordingsForCamera(state.recordingCameraID);
   renderRecordingTimeline(recordings);
   renderPersonTimeline(recordings);
+  updateRecordingDeleteAction();
 });
 $('#recordingPlayPause').addEventListener('click', toggleRecordingPlayback);
 $('#recordingScrubber').addEventListener('input', (event) => {

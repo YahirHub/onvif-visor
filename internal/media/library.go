@@ -20,6 +20,7 @@ const maxPlaybackViewers = 4
 
 var (
 	ErrRecordingNotFound = errors.New("recording not found")
+	ErrRecordingActive   = errors.New("recording is active")
 	ErrTooManyPlayback   = errors.New("too many recording viewers")
 )
 
@@ -30,6 +31,12 @@ type RecordingFile struct {
 	DurationSecond float64   `json:"duration_seconds"`
 	SizeBytes      int64     `json:"size_bytes"`
 	Active         bool      `json:"active"`
+}
+
+type durationCacheEntry struct {
+	SizeBytes      int64
+	ModifiedUnixNS int64
+	DurationSecond float64
 }
 
 func (m *Manager) ListRecordings(cameraID string) ([]RecordingFile, error) {
@@ -79,6 +86,119 @@ func (m *Manager) ListRecordings(cameraID string) ([]RecordingFile, error) {
 
 	sort.Slice(files, func(i, j int) bool { return files[i].StartedAt.After(files[j].StartedAt) })
 	return files, nil
+}
+
+func (m *Manager) RecordingMetadata(ctx context.Context, cameraID, name string) (RecordingFile, error) {
+	path, err := m.RecordingPath(cameraID, name)
+	if err != nil {
+		return RecordingFile{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RecordingFile{}, ErrRecordingNotFound
+		}
+		return RecordingFile{}, fmt.Errorf("stat recording metadata: %w", err)
+	}
+	startedAt, ok := parseRecordingStart(name)
+	if !ok {
+		startedAt = info.ModTime().UTC()
+	}
+	active := m.recordingIsActive(cameraID, path)
+	duration := info.ModTime().Sub(startedAt).Seconds()
+	if active {
+		duration = time.Since(startedAt).Seconds()
+	} else if exact, exactErr := m.exactRecordingDuration(ctx, path, info); exactErr == nil {
+		duration = exact
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	return RecordingFile{
+		CameraID: cameraID, Name: name, StartedAt: startedAt,
+		DurationSecond: duration, SizeBytes: info.Size(), Active: active,
+	}, nil
+}
+
+func (m *Manager) exactRecordingDuration(ctx context.Context, path string, info os.FileInfo) (float64, error) {
+	if m.ffprobe == "" {
+		return 0, errors.New("ffprobe not available")
+	}
+	modified := info.ModTime().UnixNano()
+	m.durationMu.Lock()
+	if cached, ok := m.durationCache[path]; ok && cached.SizeBytes == info.Size() && cached.ModifiedUnixNS == modified {
+		m.durationMu.Unlock()
+		return cached.DurationSecond, nil
+	}
+	m.durationMu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, m.ffprobe,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		if probeCtx.Err() != nil {
+			return 0, fmt.Errorf("probe recording duration: %w", probeCtx.Err())
+		}
+		return 0, fmt.Errorf("probe recording duration: %w", err)
+	}
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil || duration < 0 {
+		return 0, errors.New("invalid recording duration")
+	}
+	m.durationMu.Lock()
+	if m.durationCache == nil {
+		m.durationCache = make(map[string]durationCacheEntry)
+	}
+	m.durationCache[path] = durationCacheEntry{SizeBytes: info.Size(), ModifiedUnixNS: modified, DurationSecond: duration}
+	m.durationMu.Unlock()
+	return duration, nil
+}
+
+func (m *Manager) recordingIsActive(cameraID, path string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec := m.recorders[cameraID]
+	return rec != nil && samePath(rec.path, path)
+}
+
+func (m *Manager) invalidateRecordingDuration(path string) {
+	m.durationMu.Lock()
+	delete(m.durationCache, path)
+	m.durationMu.Unlock()
+}
+
+func (m *Manager) RecordingExists(cameraID, name string) bool {
+	path, err := m.RecordingPath(cameraID, name)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func (m *Manager) DeleteRecording(cameraID, name string) error {
+	path, err := m.RecordingPath(cameraID, name)
+	if err != nil {
+		return err
+	}
+	if m.recordingIsActive(cameraID, path) {
+		return ErrRecordingActive
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrRecordingNotFound
+		}
+		return fmt.Errorf("delete recording: %w", err)
+	}
+	m.invalidateRecordingDuration(path)
+	_ = syncParentDirectory(path)
+	return nil
 }
 
 func parseRecordingStart(name string) (time.Time, bool) {

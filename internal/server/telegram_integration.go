@@ -522,17 +522,19 @@ func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status
 	if err != nil {
 		return
 	}
-	streamURI, err := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
-	if err != nil {
-		return
-	}
 	client := tg.New()
 	caption := "⚠️ Evento detectado · " + cam.Name
-	if !status.StartedAt.IsZero() {
-		caption += "\n" + status.StartedAt.Local().Format("02/01/2006 15:04:05")
+	eventTime := event.Time
+	if eventTime.IsZero() {
+		eventTime = time.Now().UTC()
 	}
+	caption += "\n" + eventTime.Local().Format("02/01/2006 15:04:05")
 
 	if cfg.MediaMode == "video" {
+		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+		if uriErr != nil {
+			return
+		}
 		path, clipErr := a.media.CaptureClip(ctx, streamURI, time.Duration(cfg.VideoSeconds)*time.Second)
 		if clipErr != nil {
 			return
@@ -545,13 +547,23 @@ func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status
 		}
 		return
 	}
-	image, err := a.media.Snapshot(ctx, streamURI)
-	if err != nil {
+
+	// Las alertas de foto sólo se envían con un frame que NanoDet haya
+	// clasificado realmente como persona. Así no se manda la primera imagen
+	// genérica del evento cuando el sujeto todavía no entró en cuadro.
+	if a.analytics == nil || !a.analytics.Status().Ready {
 		return
 	}
+	personCtx, personCancel := context.WithTimeout(ctx, 10*time.Second)
+	frame, found := a.analytics.WaitForPersonFrame(personCtx, cam.ID, eventTime.Add(-3*time.Second))
+	personCancel()
+	if !found {
+		return
+	}
+	caption += fmt.Sprintf("\nPersona · %.0f%%", frame.Confidence*100)
 	for _, chat := range chats {
 		if chat.Enabled {
-			_ = client.SendPhoto(ctx, token, chat.ChatID, image, caption)
+			_ = client.SendPhoto(ctx, token, chat.ChatID, frame.JPEG, caption)
 		}
 	}
 }

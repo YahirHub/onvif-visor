@@ -181,6 +181,7 @@
                     <div><strong id="recordingPlayerTitle">Reproducción</strong><span id="recordingPlayerDate"></span></div>
                     <div class="recording-player-actions">
                       <a id="recordingDownload" class="button ghost" href="#" download>Descargar</a>
+                      <button id="recordingDeleteBtn" class="button danger" type="button">Eliminar</button>
                       <button id="recordingClosePlayer" class="icon-button" type="button" aria-label="Cerrar reproducción">×</button>
                     </div>
                   </div>
@@ -217,6 +218,29 @@
                   </div>
                   <p id="timelineEmpty" class="timeline-empty" hidden>No hay clips en esta fecha.</p>
                 </section>
+
+                <div class="recording-retention-bar">
+                  <div class="recording-retention-filters">
+                    <label class="compact-field"><span>Eliminar</span>
+                      <select id="recordingDeleteScope">
+                        <option value="day">Día seleccionado</option>
+                        <option value="week">Semana seleccionada</option>
+                        <option value="month">Mes seleccionado</option>
+                        <option value="previous-month">Mes anterior</option>
+                        <option value="custom">Rango personalizado</option>
+                        <option value="all">Todas las grabaciones</option>
+                      </select>
+                    </label>
+                    <div id="recordingDeleteCustomRange" class="recording-delete-custom" hidden>
+                      <label class="compact-field"><span>Desde</span><input id="recordingDeleteFrom" type="date"></label>
+                      <label class="compact-field"><span>Hasta</span><input id="recordingDeleteTo" type="date"></label>
+                    </div>
+                  </div>
+                  <div class="recording-retention-actions">
+                    <button id="recordingsDeleteFilteredBtn" class="button danger" type="button">Eliminar filtrados</button>
+                    <button id="recordingsDeleteAllBtn" class="button danger-solid" type="button">Eliminar todos</button>
+                  </div>
+                </div>
 
                 <div class="section-toolbar recording-list-head">
                   <div><h2>Clips</h2><p id="recordingListMeta">0 grabaciones</p></div>
@@ -323,17 +347,17 @@
               <form id="telegramSettingsForm" class="settings-form">
                 <label class="settings-check"><input id="telegramNotificationsEnabled" type="checkbox"><span>Enviar alertas por detección/eventos</span></label>
                 <div class="form-row">
-                  <label class="field">Medio de la alerta
+                  <label class="field">Medio de las alertas automáticas
                     <select id="telegramMediaMode">
-                      <option value="photo">Foto</option>
+                      <option value="photo">Foto con persona detectada</option>
                       <option value="video">Fragmento de vídeo</option>
                     </select>
                   </label>
-                  <label class="field">Duración por defecto
+                  <label class="field">Duración de vídeo por defecto
                     <input id="telegramVideoSeconds" type="number" min="3" max="60" value="5" inputmode="numeric">
                   </label>
                 </div>
-                <p class="hint">Se usa en alertas de vídeo y en <span class="mono">/video Cámara</span>. Puedes sobrescribirla con <span class="mono">/video Cámara 30</span> (3–60 s).</p>
+                <p class="hint">El medio anterior sólo define qué envían las alertas automáticas; no cambia los comandos <span class="mono">/foto</span> ni <span class="mono">/video</span>. La duración se usa cuando una alerta envía vídeo y también en <span class="mono">/video Cámara</span>; puedes sobrescribirla con <span class="mono">/video Cámara 30</span> (3–60 s).</p>
                 <button id="telegramSaveSettingsBtn" class="button secondary" type="submit">Guardar opciones</button>
               </form>
 

@@ -13,6 +13,7 @@ const maxLiveViewersPerCamera = 4
 
 type Manager struct {
 	ffmpeg        string
+	ffprobe       string
 	recordingsDir string
 
 	mu              sync.Mutex
@@ -20,6 +21,9 @@ type Manager struct {
 	playbackViewers int
 	recorders       map[string]*recording
 	compressionSem  chan struct{}
+
+	durationMu    sync.Mutex
+	durationCache map[string]durationCacheEntry
 }
 
 type RecordingStatus struct {
@@ -52,12 +56,20 @@ func New(ffmpegPath, recordingsDir string) (*Manager, error) {
 	if recordingsDir == "" {
 		return nil, errors.New("recordings directory is required")
 	}
+	ffprobe := ""
+	if sibling, siblingErr := exec.LookPath(filepath.Join(filepath.Dir(resolved), "ffprobe")); siblingErr == nil {
+		ffprobe = sibling
+	} else if found, foundErr := exec.LookPath("ffprobe"); foundErr == nil {
+		ffprobe = found
+	}
 	return &Manager{
 		ffmpeg:         resolved,
+		ffprobe:        ffprobe,
 		recordingsDir:  filepath.Clean(recordingsDir),
 		liveViewers:    make(map[string]int),
 		recorders:      make(map[string]*recording),
 		compressionSem: make(chan struct{}, 1),
+		durationCache:  make(map[string]durationCacheEntry),
 	}, nil
 }
 

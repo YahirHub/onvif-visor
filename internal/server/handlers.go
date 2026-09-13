@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"onvif-visor/internal/analytics"
 	"onvif-visor/internal/media"
 	onvifsvc "onvif-visor/internal/onvif"
 	"onvif-visor/internal/store"
@@ -244,11 +245,59 @@ func (a *App) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(image)
 }
 
-func (a *App) handleEvents(w http.ResponseWriter, _ *http.Request) {
+func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 	a.eventsMu.Lock()
 	out := append([]CameraEvent(nil), a.events...)
 	a.eventsMu.Unlock()
-	writeJSON(w, http.StatusOK, out)
+
+	bestByCamera := make(map[string]map[string]analytics.PersonSegment)
+	missing := make(map[string]map[string]struct{})
+	filtered := out[:0]
+	for _, event := range out {
+		if event.RecordingName != "" && !a.media.RecordingExists(event.CameraID, event.RecordingName) {
+			if missing[event.CameraID] == nil {
+				missing[event.CameraID] = make(map[string]struct{})
+			}
+			missing[event.CameraID][event.RecordingName] = struct{}{}
+			continue
+		}
+		if event.RecordingName != "" && a.analytics != nil {
+			best, ok := bestByCamera[event.CameraID]
+			if !ok {
+				best = make(map[string]analytics.PersonSegment)
+				segments, err := a.analytics.Segments(r.Context(), event.CameraID)
+				if err == nil {
+					for _, segment := range segments {
+						current, exists := best[segment.RecordingName]
+						if !exists || segment.MaxConfidence > current.MaxConfidence {
+							best[segment.RecordingName] = segment
+						}
+					}
+				}
+				bestByCamera[event.CameraID] = best
+			}
+			if segment, ok := best[event.RecordingName]; ok {
+				event.PersonOffset = segment.PeakSecond
+				event.PersonConfidence = segment.MaxConfidence
+			}
+		}
+		filtered = append(filtered, event)
+	}
+	if len(missing) > 0 {
+		a.eventsMu.Lock()
+		kept := a.events[:0]
+		for _, event := range a.events {
+			if names := missing[event.CameraID]; names != nil {
+				if _, remove := names[event.RecordingName]; remove {
+					continue
+				}
+			}
+			kept = append(kept, event)
+		}
+		a.events = kept
+		a.eventsMu.Unlock()
+	}
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 func (a *App) handleRecordings(w http.ResponseWriter, r *http.Request) {

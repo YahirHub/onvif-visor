@@ -27,15 +27,16 @@ Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, pe
 - Post-roll configurable de 1 a 600 segundos.
 - Grabación con `-c copy` a MKV para evitar recodificación siempre que el stream sea compatible.
 - Biblioteca de grabaciones por cámara con cantidad, espacio usado y duración aproximada.
-- Miniaturas JPEG de grabaciones y miniaturas de eventos; un evento asociado a un clip puede abrir la reproducción directamente en su segundo exacto.
-- Línea de tiempo de 24 horas filtrable por fecha.
+- Miniaturas JPEG de grabaciones y eventos; si NanoDet encontró una persona, se usa preferentemente el frame de mayor confianza para que pueda reconocerse sin abrir el clip. Un evento asociado a un clip puede abrir la reproducción directamente en su segundo exacto.
+- Línea de tiempo de 24 horas filtrable por fecha; al reproducir un clip cerrado se consulta y cachea su duración real con `ffprobe` para que scrubber y contador terminen junto con el video.
+- Eliminación segura de grabaciones con modal: clip individual, día, semana, mes, mes anterior, rango personalizado o todos los clips cerrados de una cámara; nunca borra el archivo que sigue grabándose.
 - Analítica local de personas con **NanoDet-Plus-m 320** sobre ONNX Runtime: muestreo base de 1 FPS, una sola inferencia a la vez y sin enviar vídeo a servicios externos.
 - Backfill automático de grabaciones cerradas y detección incremental durante grabaciones activas/programadas; los resultados se guardan en `data/analytics.db`.
 - Pista **Personas** bajo la línea de tiempo: cada tramo detectado es clicable y abre el MKV en el segundo de mayor confianza de esa detección.
 - Escritura Matroska con clusters cortos, flush frecuente y sincronización periódica a disco para reducir el daño ante una interrupción brusca.
 - Compresión H.264 en segundo plano al cerrar un clip; el original sólo se reemplaza atómicamente cuando el resultado es válido y realmente ahorra espacio.
 - Módulo **Integraciones > Telegram**: valida el token con Bot API, lo guarda cifrado, vincula chats con códigos de 4 dígitos de un solo uso válidos 10 minutos y permite eliminar por completo la integración.
-- Alertas Telegram configurables por evento con foto o fragmento MP4 de 3–60 s, además de `/camaras`, `/foto <camara>`, `/video <camara>` y `/video <camara> <segundos>` para chats vinculados.
+- Alertas Telegram configurables por evento con foto o fragmento MP4 de 3–60 s; en modo foto sólo se envía un frame que NanoDet haya confirmado como persona. También incluye `/camaras`, `/foto <camara>`, `/video <camara>` y `/video <camara> <segundos>` para chats vinculados.
 - Reproducción web de clips mediante FFmpeg -> MJPEG, con pausa/reanudación y seek por segundos.
 - Descarga autenticada del MKV original.
 - Servicio ligado a `127.0.0.1` por defecto.
@@ -95,7 +96,23 @@ make build-static
 
 ## Instalar como servicio
 
-El instalador detecta automáticamente `systemd`, OpenRC, runit o SysV init, eleva privilegios con `sudo`, `doas` o `pkexec` cuando hace falta e instala el binario en `/opt/onvif-visor/onvif-visor`. También materializa el modelo NanoDet embebido en `/opt/onvif-visor/models/`. En la primera instalación migra `data/` y `recordings/` desde `--source-dir` sólo si los destinos están vacíos; en actualizaciones nunca sobreescribe esos datos. ONNX Runtime sigue siendo una dependencia del sistema; el visor lo autodetecta en rutas estándar o puede persistirse una ruta personalizada con `-onnxruntime` durante `--install`.
+La ruta recomendada desde el código fuente es `install.sh`. Detecta `apk`, `apt`, `dnf`, `yum`, `pacman` o `zypper`; instala compilador C, Go, Make, Git, curl, FFmpeg/ffprobe y certificados. Si el Go del sistema es anterior a 1.24 descarga una versión estable oficial desde `go.dev`. Para ONNX Runtime primero intenta el paquete nativo del sistema —obligatorio en musl/Alpine— y, en Linux glibc x86_64/aarch64, puede descargar automáticamente el release oficial más reciente de Microsoft. Después ejecuta `go test`, `go vet`, `make build` y finalmente `onvif-visor --install`.
+
+```bash
+./install.sh
+```
+
+Los flags adicionales se pasan al instalador del visor; por ejemplo, para el primer usuario de una instalación nueva:
+
+```bash
+./install.sh -ui-user operador -ui-password 'una-clave-larga'
+```
+
+Para omitir únicamente las pruebas automáticas durante una actualización controlada puede usarse `ONVIF_SKIP_TESTS=1 ./install.sh`. No se recomienda en una instalación normal.
+
+El instalador interno detecta automáticamente `systemd`, OpenRC, runit o SysV init, eleva privilegios con `sudo`, `doas` o `pkexec` cuando hace falta e instala el binario en `/opt/onvif-visor/onvif-visor`. También materializa el modelo NanoDet embebido en `/opt/onvif-visor/models/`. En la primera instalación migra `data/` y `recordings/` desde `--source-dir` sólo si los destinos están vacíos; en actualizaciones nunca sobreescribe esos datos. ONNX Runtime sigue siendo una dependencia del sistema; el visor lo autodetecta en rutas estándar o `install.sh` persiste explícitamente la ruta encontrada.
+
+La instalación manual sigue disponible:
 
 ```bash
 sudo ./dist/onvif-visor --install --listen 0.0.0.0:8081 --source-dir .
@@ -116,7 +133,7 @@ Para desinstalar el servicio y el binario, conservando cámaras, SQLite y grabac
 sudo onvif-visor --remove
 ```
 
-La configuración de instalación no contiene secretos: `install.json` guarda únicamente el gestor detectado, dirección de escucha y ruta de FFmpeg. Las cuentas permanecen en SQLite y los secretos de cámaras/Telegram siguen protegidos por `master.key`.
+La configuración de instalación no contiene secretos: `install.json` guarda únicamente el gestor detectado, dirección de escucha y rutas de FFmpeg/ONNX Runtime. Las cuentas permanecen en SQLite y los secretos de cámaras/Telegram siguen protegidos por `master.key`.
 
 ## Ejecutar localmente
 
@@ -204,9 +221,9 @@ Cada stream sigue usando el pipeline MJPEG del visor. El selector lateral permit
 
 Las grabaciones se almacenan en `recordings/<camera-id>/` y solo se indexan archivos regulares `.mkv`. La API no devuelve la ruta física del host: identifica cada clip por `camera_id` + nombre de archivo validado.
 
-La hora de inicio se obtiene del nombre que genera el grabador (`YYYYMMDD-HHMMSS.mmm.mkv`). Para mantener una sola dependencia externa, la duración mostrada se aproxima usando el timestamp de inicio y la última modificación del archivo; no se requiere `ffprobe` adicional.
+La hora de inicio se obtiene del nombre que genera el grabador (`YYYYMMDD-HHMMSS.mmm.mkv`). El listado inicial conserva una estimación barata para no lanzar decenas de procesos sobre bibliotecas grandes, pero al abrir un clip el servidor obtiene su duración real con `ffprobe` y la cachea por tamaño+mtime. El scrubber, contador y final de reproducción usan ese valor exacto, por lo que el reloj deja de avanzar cuando termina el contenido real del MKV.
 
-El playback del navegador convierte el MKV almacenado a MJPEG a velocidad real. Permite seek por segundos, pausa/reanudación y hasta 4 reproducciones simultáneas. El playback web actual no incluye audio; la descarga entrega el MKV que quedó almacenado después de la optimización de espacio.
+El playback del navegador convierte el MKV almacenado a MJPEG a velocidad real. Permite seek por segundos, pausa/reanudación y hasta 4 reproducciones simultáneas. El playback web actual no incluye audio; la descarga entrega el MKV que quedó almacenado después de la optimización de espacio. Desde el reproductor se puede eliminar el clip actual con confirmación. La barra de retención permite eliminar por día seleccionado, semana, mes, mes anterior, rango personalizado o todas las grabaciones cerradas de la cámara; una grabación activa nunca se elimina. Al borrar un clip también se purgan su metadata NanoDet y los eventos en memoria asociados, y `/api/events` filtra cualquier referencia cuyo MKV ya no exista.
 
 La analítica usa el modelo oficial NanoDet-Plus-m 320 y únicamente consume la clase COCO `person`. El modelo y su licencia Apache-2.0 se conservan en `internal/analytics/assets/` y el instalador despliega ambos junto al servicio. Para clips cerrados, un único worker procesa frames a 1 FPS y guarda intervalos fusionados en `analytics.db`; la huella tamaño+mtime evita repetir archivos ya terminados. Durante una grabación activa se analiza el substream ligero cuando está disponible y se registra el offset contra el MKV que se está escribiendo, por lo que una grabación programada de varias horas puede mostrar detecciones antes de cerrarse. El botón **Reanalizar** marca la biblioteca como pendiente y el scanner la vuelve a recorrer por tandas sin duplicar trabajos ya en cola.
 
@@ -225,7 +242,7 @@ Cuando un evento incluye un estado explícito `false`, `off`, `inactive`, `idle`
 
 La vista **Integraciones** permite conectar un bot dedicado mediante el token de BotFather. El backend valida el token con `getMe`, cifra el secreto con la misma llave maestra AES-GCM usada para otros secretos y nunca lo devuelve a la API del navegador. Una vez configurado se muestra la URL `https://t.me/<bot>` y pueden generarse códigos de 4 dígitos de un solo uso, válidos 10 minutos. En Telegram se aceptan `/start CODIGO` y `/login CODIGO`.
 
-Un chat vinculado puede usar `/camaras`, `/foto <camara>`, `/video <camara>` y `/video <camara> <segundos>`. El primer formato usa la duración por defecto configurada en el panel; el segundo puede pedir entre 3 y 60 segundos, por ejemplo `/video Cocina 30`. Los clips se recodifican a H.264 1280px/12 fps con timestamps reiniciados, warm-up inicial y bitrate acotado para evitar los fragmentos de ~1 segundo y el efecto borroso observado al arrancar directamente desde RTSP. Para no bloquear el bot ni sobrecargar el host, el long polling continúa mientras se genera el clip y sólo se permite una captura Telegram simultánea. Las alertas automáticas usan la misma duración por defecto cuando el medio elegido es vídeo. Eliminar la integración borra el token cifrado, los códigos y los chats vinculados.
+Un chat vinculado puede usar `/camaras`, `/foto <camara>`, `/video <camara>` y `/video <camara> <segundos>`. `/video <camara>` usa la duración de vídeo por defecto configurada en el panel y `/video Cocina 30` puede sobrescribirla entre 3 y 60 segundos. El selector **Medio de las alertas automáticas** sólo decide qué adjuntan las alertas; no modifica el comportamiento de `/foto` ni `/video`, y la duración permanece editable aunque las alertas estén en modo foto. Los clips se recodifican a H.264 1280px/12 fps con timestamps reiniciados, warm-up inicial y bitrate acotado para evitar los fragmentos de ~1 segundo y el efecto borroso observado al arrancar directamente desde RTSP. Para no bloquear el bot ni sobrecargar el host, el long polling continúa mientras se genera el clip y sólo se permite una captura Telegram simultánea. Cuando las alertas automáticas están configuradas como **foto**, ya no se envía el primer frame genérico del evento: el backend espera hasta 10 segundos un frame que NanoDet haya clasificado realmente como `person`, conserva la relación de aspecto original del substream y envía exactamente esa captura con su confianza; si no aparece ninguna persona, no genera una alerta fotográfica falsa. `/foto <camara>` sigue siendo una captura manual inmediata. Las alertas en modo vídeo conservan la duración configurada. Eliminar la integración borra el token cifrado, los códigos y los chats vinculados.
 
 ## Seguridad
 
@@ -254,7 +271,7 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 - La grabación usa Matroska (`.mkv`) y copia los codecs del origen. Si una cámara entrega un formato que FFmpeg no puede remuxear a MKV, la grabación fallará y requerirá una política específica.
 - Un clip todavía activo puede no ser reproducible hasta que FFmpeg cierre correctamente el contenedor MKV.
 - Si se elimina una cámara, sus grabaciones permanecen físicamente en disco pero dejan de aparecer en la biblioteca mientras esa cámara no esté configurada.
-- NanoDet trabaja a 1 FPS para mantener bajo el consumo de CPU; una aparición de menos de un segundo puede quedar entre muestras. La analítica actual sólo clasifica `person`: no hace reconocimiento facial, identidad, tracking persistente ni análisis en la nube.
+- NanoDet trabaja a 1 FPS para mantener bajo el consumo de CPU; una aparición de menos de un segundo puede quedar entre muestras. La analítica actual sólo clasifica `person`: no hace reconocimiento facial, identidad, tracking persistente ni análisis en la nube. Por la misma razón, una alerta Telegram configurada como foto se omite si no hay ningún frame `person` durante la ventana de espera de 10 segundos.
 - Si `libonnxruntime` no está disponible, el visor sigue funcionando pero reporta la pista de personas como no disponible. El build estático `CGO_ENABLED=0` tiene el mismo comportamiento degradado.
 - No se implementan todavía PTZ ni nube.
 
