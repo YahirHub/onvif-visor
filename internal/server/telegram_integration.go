@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -488,6 +489,40 @@ func (a *App) sendTelegramCameraVideo(ctx context.Context, client *tg.Client, to
 	}
 }
 
+func personRecordingSnapshotTarget(status media.RecordingStatus, detectedAt time.Time) (string, float64, bool) {
+	if status.Path == "" || status.StartedAt.IsZero() || detectedAt.IsZero() {
+		return "", 0, false
+	}
+	if detectedAt.Before(status.StartedAt) {
+		return "", 0, false
+	}
+	offset := detectedAt.Sub(status.StartedAt).Seconds()
+	return filepath.Base(status.Path), offset, true
+}
+
+func (a *App) telegramPersonPhoto(ctx context.Context, cam store.Camera, status media.RecordingStatus, detectedAt time.Time) ([]byte, error) {
+	// Primero intenta el MKV principal que ya se está grabando. Ese archivo usa
+	// la misma geometría del stream principal del panel y el offset corresponde
+	// al instante exacto en que NanoDet confirmó a la persona.
+	if name, offset, ok := personRecordingSnapshotTarget(status, detectedAt); ok {
+		recordingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		image, err := a.media.RecordingSnapshot(recordingCtx, cam.ID, name, offset)
+		cancel()
+		if err == nil && len(image) > 0 {
+			return image, nil
+		}
+	}
+
+	// El MKV activo puede no haber volcado todavía el cluster del instante
+	// detectado. En ese caso toma una captura inmediata del RTSP principal, no
+	// del substream ligero que usa NanoDet.
+	streamURI, err := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+	if err != nil {
+		return nil, err
+	}
+	return a.media.Snapshot(ctx, streamURI)
+}
+
 func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status media.RecordingStatus) {
 	if !event.Recording {
 		return
@@ -560,10 +595,14 @@ func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status
 	if !found {
 		return
 	}
+	image, err := a.telegramPersonPhoto(ctx, cam, status, frame.DetectedAt)
+	if err != nil || len(image) == 0 {
+		return
+	}
 	caption += fmt.Sprintf("\nPersona · %.0f%%", frame.Confidence*100)
 	for _, chat := range chats {
 		if chat.Enabled {
-			_ = client.SendPhoto(ctx, token, chat.ChatID, frame.JPEG, caption)
+			_ = client.SendPhoto(ctx, token, chat.ChatID, image, caption)
 		}
 	}
 }

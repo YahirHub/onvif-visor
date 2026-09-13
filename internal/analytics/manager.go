@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
 	"io"
 	"net/url"
 	"os"
@@ -40,7 +38,6 @@ type CameraSource struct {
 }
 
 type PersonFrame struct {
-	JPEG       []byte
 	DetectedAt time.Time
 	Confidence float64
 }
@@ -176,12 +173,10 @@ func (m *Manager) WaitForPersonFrame(ctx context.Context, cameraID string, notBe
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		frame, ok := m.personFrames[cameraID]
-		if !ok || frame.DetectedAt.Before(notBefore) || len(frame.JPEG) == 0 {
+		if !ok || frame.DetectedAt.Before(notBefore) {
 			return PersonFrame{}, false
 		}
-		copyFrame := frame
-		copyFrame.JPEG = append([]byte(nil), frame.JPEG...)
-		return copyFrame, true
+		return frame, true
 	}
 	if frame, ok := check(); ok {
 		return frame, true
@@ -428,35 +423,10 @@ func (m *Manager) detect(frame []byte) (float32, bool, error) {
 	return m.detector.DetectPerson(frame)
 }
 
-func (m *Manager) rememberPersonFrame(cameraID string, frame []byte, width, height int, confidence float32) {
-	jpegBytes, err := encodeBGRJPEG(frame, width, height)
-	if err != nil {
-		m.setLastError(err)
-		return
-	}
+func (m *Manager) rememberPersonFrame(cameraID string, confidence float32) {
 	m.mu.Lock()
-	m.personFrames[cameraID] = PersonFrame{JPEG: jpegBytes, DetectedAt: time.Now().UTC(), Confidence: float64(confidence)}
+	m.personFrames[cameraID] = PersonFrame{DetectedAt: time.Now().UTC(), Confidence: float64(confidence)}
 	m.mu.Unlock()
-}
-
-func encodeBGRJPEG(frame []byte, width, height int) ([]byte, error) {
-	if width <= 0 || height <= 0 || len(frame) != width*height*3 {
-		return nil, errors.New("invalid BGR frame for JPEG")
-	}
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	for i := 0; i < width*height; i++ {
-		src := i * 3
-		dst := i * 4
-		img.Pix[dst] = frame[src+2]
-		img.Pix[dst+1] = frame[src+1]
-		img.Pix[dst+2] = frame[src]
-		img.Pix[dst+3] = 0xff
-	}
-	var output bytes.Buffer
-	if err := jpeg.Encode(&output, img, &jpeg.Options{Quality: 88}); err != nil {
-		return nil, fmt.Errorf("encode person frame JPEG: %w", err)
-	}
-	return output.Bytes(), nil
 }
 
 func (m *Manager) liveLoop(ctx context.Context, source CameraSource) {
@@ -510,7 +480,7 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 		if !found {
 			continue
 		}
-		m.rememberPersonFrame(cameraID, frame, width, height, confidence)
+		m.rememberPersonFrame(cameraID, confidence)
 		status := m.media.Status(cameraID)
 		if !status.Active || status.Path == "" || status.StartedAt.IsZero() {
 			continue

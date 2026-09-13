@@ -1,6 +1,11 @@
 package server
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"onvif-visor/internal/media"
+)
 
 func TestParseTelegramCommand(t *testing.T) {
 	tests := []struct {
@@ -59,5 +64,34 @@ func TestValidFourDigitCode(t *testing.T) {
 		if validFourDigitCode(invalid) {
 			t.Fatalf("expected invalid code %q", invalid)
 		}
+	}
+}
+
+func TestPersonRecordingSnapshotTarget(t *testing.T) {
+	started := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	status := media.RecordingStatus{Path: "/tmp/camera/20260913-000000.000.mkv", StartedAt: started}
+	name, offset, ok := personRecordingSnapshotTarget(status, started.Add(7*time.Second+250*time.Millisecond))
+	if !ok {
+		t.Fatal("expected recording snapshot target")
+	}
+	if name != "20260913-000000.000.mkv" {
+		t.Fatalf("name=%q", name)
+	}
+	if offset < 7.249 || offset > 7.251 {
+		t.Fatalf("offset=%f, want 7.25", offset)
+	}
+}
+
+func TestPersonRecordingSnapshotTargetRejectsDetectionBeforeRecording(t *testing.T) {
+	started := time.Date(2026, 9, 13, 0, 0, 10, 0, time.UTC)
+	status := media.RecordingStatus{Path: "/tmp/camera/clip.mkv", StartedAt: started}
+	if _, _, ok := personRecordingSnapshotTarget(status, started.Add(-2*time.Second)); ok {
+		t.Fatal("detection before recording start should fall back to live primary snapshot")
+	}
+}
+
+func TestPersonRecordingSnapshotTargetRequiresRecording(t *testing.T) {
+	if _, _, ok := personRecordingSnapshotTarget(media.RecordingStatus{}, time.Now()); ok {
+		t.Fatal("empty recording status should not produce a target")
 	}
 }
