@@ -48,7 +48,7 @@ Sin cambios. Se mantiene únicamente la librería estándar de Go para la sesió
 
 # Pendientes
 - Validación visual en navegador real de escritorio/móvil cuando haya un navegador disponible en el entorno MCP.
-- Prueba extremo a extremo de live MJPEG y eventos con credenciales reales de la cámara detectada en `<IP-CAMARA-LAN>`.
+- Prueba extremo a extremo de live MJPEG y eventos contra una cámara ONVIF real de la red local.
 
 # Próximos pasos
 - Ejecutar validación final de código y Git.

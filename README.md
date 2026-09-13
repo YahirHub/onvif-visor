@@ -2,6 +2,28 @@
 
 Visor local de cámaras ONVIF escrito en Go. Descubre dispositivos en la red, permite agregarlos con credenciales, muestra previews y transmisiones en vivo, ofrece multivista adaptable, organiza grabaciones por eventos u horario y añade analítica local de personas sobre el archivo de vídeo.
 
+> **Estado del proyecto:** funcional y orientado a despliegues locales/LAN en Linux. La interfaz, autenticación, grabaciones, Telegram y analítica NanoDet funcionan sin servicios cloud obligatorios. El instalador automatizado cubre varias familias de distribuciones e init systems, pero la compatibilidad final también depende de FFmpeg, ONNX Runtime y del firmware ONVIF de cada cámara.
+
+## Inicio rápido
+
+Tras clonar el repositorio en un host Linux:
+
+```bash
+./install.sh
+```
+
+El script instala las dependencias necesarias, ejecuta pruebas, compila el binario con soporte NanoDet/ONNX Runtime y llama al instalador interno para desplegar el servicio en `/opt/onvif-visor/`.
+
+Para una instalación accesible desde la LAN, crea el usuario inicial y define la dirección de escucha en el mismo paso:
+
+```bash
+ONVIF_VISOR_USER='operador' \
+ONVIF_VISOR_PASSWORD='cambia-esto-por-una-clave-larga' \
+  ./install.sh -listen 0.0.0.0:8080
+```
+
+Después abre `http://IP-DEL-SERVIDOR:8080/`. Si prefieres probar sin instalar el servicio, usa `make build` y ejecuta `./dist/onvif-visor`; por seguridad escucha sólo en `127.0.0.1:8080` por defecto.
+
 ## Características
 
 - Descubrimiento WS-Discovery en todas las interfaces activas con multicast, hasta 16 interfaces.
@@ -69,6 +91,20 @@ La compilación principal usa `CGO_ENABLED=1` porque la analítica carga ONNX Ru
 - ONNX Runtime 1.x disponible como `libonnxruntime.so`/`libonnxruntime.so.1` para habilitar NanoDet. En Alpine/musl, `install.sh` usa el paquete nativo `apk add --no-cache onnxruntime`, que instala la `.so` compatible con musl; deliberadamente no mezcla el tarball glibc de Microsoft. En distribuciones glibc intenta primero el paquete nativo mediante apt/dnf/yum/pacman/zypper y, si no existe, descarga el release oficial Linux x64/aarch64 de Microsoft. El instalador detecta la librería mediante `ldconfig`, rutas `lib`/`lib64` y directorios multiarch.
 - Cámara ONVIF accesible desde la misma red del host.
 - Para eventos nativos se usa ONVIF Events/PullPoint; si la cámara lo anuncia pero falla, el visor puede usar un detector local de movimiento sobre RTSP como respaldo.
+
+## Compatibilidad de instalación
+
+| Entorno | Soporte automático |
+| --- | --- |
+| Alpine Linux / musl | `apk`, ONNX Runtime nativo, OpenRC cuando está disponible |
+| Debian / Ubuntu | `apt`, systemd/SysV según el host |
+| Fedora / RHEL compatibles | `dnf` o `yum` |
+| Arch Linux | `pacman` |
+| openSUSE | `zypper` |
+| Init systems | systemd, OpenRC, runit y SysV |
+| Arquitecturas | amd64 y arm64 tienen descarga automática de Go y fallback oficial de ONNX Runtime en glibc; otras arquitecturas dependen de los paquetes nativos del sistema |
+
+`install.sh` está diseñado actualmente para Linux. El binario Go puede ser portable a otros entornos, pero la instalación como servicio, FFmpeg y ONNX Runtime no se consideran soportados automáticamente fuera de Linux.
 
 ## Compilar
 
@@ -292,6 +328,18 @@ Nota: FFmpeg necesita recibir credenciales RTSP para autenticar contra determina
 -service            status|start|stop|restart del servicio instalado
 -source-dir         origen de data/ y recordings/ para la primera instalación
 ```
+
+## Publicación del repositorio y datos privados
+
+El repositorio está preparado para que los datos de ejecución no se versionen por accidente. El `.gitignore` excluye `data/`, `recordings/`, `dist/`, el binario raíz, logs y archivos del sistema comunes. Antes de publicar o hacer `git add`, conviene verificar igualmente `git status` y confirmar que no aparezcan credenciales, bases SQLite, `master.key`, grabaciones ni tokens.
+
+Los datos persistentes de una instalación normal viven fuera del código fuente después de usar `--install`, principalmente bajo `/opt/onvif-visor/data/` y `/opt/onvif-visor/recordings/`. Esos directorios no deben copiarse a un repositorio público.
+
+El modelo NanoDet incluido en `internal/analytics/assets/nanodet-plus-m_320.onnx` es un asset de terceros y conserva su aviso/licencia en `internal/analytics/assets/NANODET_LICENSE.txt`.
+
+## Licencia del proyecto
+
+Actualmente el repositorio **no incluye una licencia propia de nivel raíz para el código de ONVIF Visor**. El archivo `NANODET_LICENSE.txt` sólo cubre el componente NanoDet correspondiente y no define automáticamente los términos del resto del proyecto. Antes de permitir redistribución o contribuciones públicas conviene elegir explícitamente la licencia que quieras aplicar al código y agregar su archivo `LICENSE` en la raíz.
 
 ## Validación del proyecto
 

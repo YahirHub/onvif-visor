@@ -44,7 +44,7 @@ Agregar cambio de credenciales desde Perfil, un instalador de servicio inteligen
 
 # Despliegue real del instalador
 - Se detuvo limpiamente el proceso manual que atendía `0.0.0.0:8081` antes de migrar, evitando copiar SQLite/grabaciones abiertas.
-- `./dist/onvif-visor --install --source-dir .` detectó OpenRC y terminó correctamente.
+- `./dist/onvif-visor --install --source-dir .` detectó OpenRC y terminó correctamente en el host de validación.
 - Servicio activo: `/opt/onvif-visor/onvif-visor service-run`, habilitado en el runlevel `default`.
 - Symlink CLI: `/usr/local/bin/onvif-visor -> /opt/onvif-visor/onvif-visor`.
 - Metadata instalada: manager `openrc`, listen `0.0.0.0:8081`, ffmpeg `ffmpeg`; no contiene secretos.

@@ -70,7 +70,7 @@ Sin dependencias nuevas. Se mantiene Go standard library, `github.com/0x524a/onv
 
 # Pendientes
 - Validación visual manual/automática en un navegador real.
-- Prueba live real y multivista contra la cámara `<IP-CAMARA-LAN>` cuando se proporcionen sus credenciales.
+- Prueba live real y multivista contra una cámara ONVIF de la red local cuando se proporcionen sus credenciales.
 - Generar al menos una grabación real y validar thumbnails/playback/timeline extremo a extremo.
 - PTZ sigue fuera de alcance.
 

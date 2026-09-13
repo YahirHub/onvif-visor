@@ -2,5 +2,10 @@ data/
 recordings/
 dist/
 /onvif-visor
+.env
+.env.*
+!.env.example
 *.log
+*.tmp
+coverage.out
 .DS_Store
