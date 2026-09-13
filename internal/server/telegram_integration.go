@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"onvif-visor/internal/account"
+	"onvif-visor/internal/analytics"
 	"onvif-visor/internal/media"
 	onvifsvc "onvif-visor/internal/onvif"
 	"onvif-visor/internal/store"
@@ -604,5 +606,101 @@ func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status
 		if chat.Enabled {
 			_ = client.SendPhoto(ctx, token, chat.ChatID, image, caption)
 		}
+	}
+}
+
+func (a *App) notifyTelegramSmartEvent(cam store.Camera, event analytics.SmartEvent) {
+	select {
+	case a.telegramNotifySem <- struct{}{}:
+		defer func() { <-a.telegramNotifySem }()
+	default:
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, time.Duration(account.TelegramVideoMaxSeconds)*time.Second+35*time.Second)
+	defer cancel()
+	cfg, ok, err := a.accounts.GetTelegramConfig(ctx)
+	if err != nil || !ok || !cfg.NotificationsEnabled {
+		return
+	}
+	chats, err := a.accounts.ListTelegramChats(ctx)
+	if err != nil || len(chats) == 0 {
+		return
+	}
+	token, err := a.store.DecryptSecret(cfg.TokenCipher)
+	if err != nil {
+		return
+	}
+	caption := "⚠️ " + analyticsEventCaption(event) + " · " + cam.Name
+	when := event.OccurredAt
+	if when.IsZero() {
+		when = time.Now().UTC()
+	}
+	caption += "\n" + when.Local().Format("02/01/2006 15:04:05")
+	if len(event.MatchedRuleNames) > 0 {
+		caption += "\nRegla: " + strings.Join(event.MatchedRuleNames, ", ")
+	}
+	client := tg.New()
+	if cfg.MediaMode == "video" {
+		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+		if uriErr != nil {
+			return
+		}
+		seconds := cfg.VideoSeconds
+		if seconds < account.TelegramVideoMinSeconds || seconds > account.TelegramVideoMaxSeconds {
+			seconds = account.TelegramVideoDefaultSeconds
+		}
+		path, clipErr := a.media.CaptureClip(ctx, streamURI, time.Duration(seconds)*time.Second)
+		if clipErr != nil {
+			return
+		}
+		defer os.Remove(path)
+		for _, chat := range chats {
+			if chat.Enabled {
+				_ = client.SendVideoFile(ctx, token, chat.ChatID, path, caption)
+			}
+		}
+		return
+	}
+	var image []byte
+	if event.RecordingName != "" {
+		image, _ = a.media.RecordingSnapshot(ctx, cam.ID, event.RecordingName, math.Max(0, event.OffsetSecond))
+	}
+	if len(image) == 0 {
+		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+		if uriErr != nil {
+			return
+		}
+		image, err = a.media.Snapshot(ctx, streamURI)
+		if err != nil {
+			return
+		}
+	}
+	for _, chat := range chats {
+		if chat.Enabled {
+			_ = client.SendPhoto(ctx, token, chat.ChatID, image, caption)
+		}
+	}
+}
+
+func analyticsEventCaption(event analytics.SmartEvent) string {
+	label := event.ClassName
+	for _, class := range analytics.Classes() {
+		if class.Name == event.ClassName {
+			label = class.Label
+			break
+		}
+	}
+	switch event.Type {
+	case "zone_enter":
+		return label + " entró en " + event.ZoneName
+	case "zone_exit":
+		return label + " salió de " + event.ZoneName
+	case "line_cross":
+		if event.Direction != "" {
+			return label + " cruzó " + event.LineName + " · " + event.Direction
+		}
+		return label + " cruzó " + event.LineName
+	default:
+		return label + " detectado"
 	}
 }

@@ -5,6 +5,7 @@ import "sort"
 type DetectionPoint struct {
 	Second     float64
 	Confidence float64
+	BestScore  float64
 }
 
 func MergeDetectionPoints(points []DetectionPoint, maxGap float64) []PersonSegment {
@@ -22,6 +23,7 @@ func MergeDetectionPoints(points []DetectionPoint, maxGap float64) []PersonSegme
 		EndSecond:     ordered[0].Second + 1,
 		PeakSecond:    ordered[0].Second,
 		MaxConfidence: ordered[0].Confidence,
+		BestScore:     ordered[0].BestScore,
 		Source:        "offline",
 	}
 	for _, point := range ordered[1:] {
@@ -31,12 +33,15 @@ func MergeDetectionPoints(points []DetectionPoint, maxGap float64) []PersonSegme
 			}
 			if point.Confidence > current.MaxConfidence {
 				current.MaxConfidence = point.Confidence
+			}
+			if point.BestScore > current.BestScore {
+				current.BestScore = point.BestScore
 				current.PeakSecond = point.Second
 			}
 			continue
 		}
 		segments = append(segments, current)
-		current = PersonSegment{StartSecond: point.Second, EndSecond: point.Second + 1, PeakSecond: point.Second, MaxConfidence: point.Confidence, Source: "offline"}
+		current = PersonSegment{StartSecond: point.Second, EndSecond: point.Second + 1, PeakSecond: point.Second, MaxConfidence: point.Confidence, BestScore: point.BestScore, Source: "offline"}
 	}
 	segments = append(segments, current)
 	return segments

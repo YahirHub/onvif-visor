@@ -6,8 +6,8 @@ import "fmt"
 
 type disabledDetector struct{}
 
-func (disabledDetector) DetectPerson([]byte) (float32, bool, error) {
-	return 0, false, ErrInferenceUnavailable
+func (disabledDetector) Detect([]byte) ([]Detection, error) {
+	return nil, ErrInferenceUnavailable
 }
 func (disabledDetector) Close() error  { return nil }
 func (disabledDetector) Model() string { return ModelName }

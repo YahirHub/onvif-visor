@@ -71,6 +71,13 @@ type CameraEvent struct {
 	RecordingOffset  float64           `json:"recording_offset,omitempty"`
 	PersonOffset     float64           `json:"person_offset,omitempty"`
 	PersonConfidence float64           `json:"person_confidence,omitempty"`
+	ObjectClass      string            `json:"object_class,omitempty"`
+	ObjectOffset     float64           `json:"object_offset,omitempty"`
+	ObjectConfidence float64           `json:"object_confidence,omitempty"`
+	SmartType        string            `json:"smart_type,omitempty"`
+	ZoneName         string            `json:"zone_name,omitempty"`
+	LineName         string            `json:"line_name,omitempty"`
+	Direction        string            `json:"direction,omitempty"`
 }
 
 type requestSessionKey struct{}
@@ -97,6 +104,9 @@ func New(cfg Config) (*App, error) {
 		telegramAuthFailures: make(map[int64][]time.Time),
 	}
 	app.routes()
+	if app.analytics != nil {
+		app.analytics.SetEventHandler(app.handleSmartAnalyticsEvent)
+	}
 	app.startExistingWatchers()
 	app.startExistingAnalytics()
 	app.startScheduler()
@@ -151,7 +161,13 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/play", a.handleRecordingPlayback)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/download", a.handleRecordingDownload)
 	a.mux.HandleFunc("GET /api/analytics/status", a.handleAnalyticsStatus)
+	a.mux.HandleFunc("GET /api/analytics/classes", a.handleAnalyticsClasses)
 	a.mux.HandleFunc("GET /api/analytics/persons", a.handleAnalyticsPersons)
+	a.mux.HandleFunc("GET /api/analytics/objects", a.handleAnalyticsObjects)
+	a.mux.HandleFunc("GET /api/analytics/events", a.handleAnalyticsEvents)
+	a.mux.HandleFunc("GET /api/analytics/config/{cameraID}", a.handleAnalyticsConfig)
+	a.mux.HandleFunc("PUT /api/analytics/config/{cameraID}", a.handleAnalyticsConfigSave)
+	a.mux.HandleFunc("GET /api/analytics/summary", a.handleAnalyticsSummary)
 	a.mux.HandleFunc("GET /api/analytics/recordings", a.handleAnalyticsRecordings)
 	a.mux.HandleFunc("POST /api/analytics/reindex", a.handleAnalyticsReindex)
 	a.mux.HandleFunc("GET /api/integrations/telegram", a.handleTelegramStatus)

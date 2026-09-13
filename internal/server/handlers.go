@@ -269,7 +269,15 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 				if err == nil {
 					for _, segment := range segments {
 						current, exists := best[segment.RecordingName]
-						if !exists || segment.MaxConfidence > current.MaxConfidence {
+						segmentScore := segment.BestScore
+						if segmentScore <= 0 {
+							segmentScore = segment.MaxConfidence
+						}
+						currentScore := current.BestScore
+						if currentScore <= 0 {
+							currentScore = current.MaxConfidence
+						}
+						if !exists || segmentScore > currentScore {
 							best[segment.RecordingName] = segment
 						}
 					}

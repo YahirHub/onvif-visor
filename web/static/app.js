@@ -2,6 +2,15 @@ const state = {
   cameras: [],
   recordings: [],
   personSegments: [],
+  objectSegments: [],
+  analyticsClasses: [],
+  analyticsConfig: null,
+  analyticsCameraID: '',
+  analyticsDrawing: null,
+  analyticsRuleEditIndex: -1,
+  analyticsSummary: null,
+  analyticsSummaryKey: '',
+  analyticsSummaryFetchedAt: 0,
   analyticsAnalyses: [],
   analyticsStatus: null,
   analyticsLoading: false,
@@ -525,6 +534,7 @@ function renderCameras() {
     const fallback = $('.camera-thumb-fallback', card);
     const statusChip = $('.live-chip', card);
     const statusText = $('.camera-status-text', card);
+    const analyticsButton = $('.camera-analytics', card);
     const scheduleButton = $('.camera-schedule', card);
     const deleteButton = $('.camera-delete', card);
     const toggle = $('.record-toggle', card);
@@ -573,6 +583,7 @@ function renderCameras() {
       }
     });
 
+    analyticsButton.addEventListener('click', () => openAnalyticsDialog(camera));
     scheduleButton.addEventListener('click', () => openScheduleDialog(camera));
 
     deleteButton.addEventListener('click', async () => {
@@ -903,10 +914,11 @@ function recordingsForCamera(cameraID) {
   return state.recordings.filter(recording => recording.camera_id === cameraID);
 }
 
-function personSegmentsFingerprint(segments) {
+function objectSegmentsFingerprint(segments) {
   return JSON.stringify((segments || []).map(segment => [
-    segment.id, segment.recording_name, segment.start_seconds, segment.end_seconds,
-    segment.peak_seconds, segment.max_confidence,
+    segment.id, segment.recording_name, segment.class_id, segment.class_name,
+    segment.start_seconds, segment.end_seconds, segment.peak_seconds,
+    segment.max_confidence, segment.best_score,
   ]));
 }
 
@@ -915,20 +927,24 @@ async function loadRecordingAnalytics({ silent = false } = {}) {
   state.analyticsLoading = true;
   try {
     const cameraID = encodeURIComponent(state.recordingCameraID);
-    const [status, segments] = await Promise.all([
+    const [status, segments, classes] = await Promise.all([
       api('/api/analytics/status'),
-      api(`/api/analytics/persons?camera_id=${cameraID}`),
+      api(`/api/analytics/objects?camera_id=${cameraID}`),
+      state.analyticsClasses.length ? Promise.resolve(state.analyticsClasses) : api('/api/analytics/classes'),
     ]);
+    state.analyticsClasses = classes || [];
     const nextSegments = segments || [];
-    const changed = personSegmentsFingerprint(nextSegments) !== personSegmentsFingerprint(state.personSegments);
+    const changed = objectSegmentsFingerprint(nextSegments) !== objectSegmentsFingerprint(state.objectSegments);
     state.analyticsStatus = status;
-    state.personSegments = nextSegments;
+    state.objectSegments = nextSegments;
+    state.personSegments = nextSegments.filter(segment => segment.class_name === 'person');
     renderAnalyticsStatus();
     if (changed) {
       const recordings = recordingsForCamera(state.recordingCameraID);
-      renderPersonTimeline(recordings);
+      renderObjectTimeline(recordings);
       renderRecordingCards(recordings);
     }
+    await loadAnalyticsSummary({ silent: true });
   } catch (error) {
     if (!(error instanceof SessionRequiredError) && !silent) setStatus(error.message, false);
   } finally {
@@ -959,10 +975,87 @@ function renderAnalyticsStatus() {
     const percent = duration > 0 ? Math.min(100, Math.round(progress / duration * 100)) : 0;
     element.textContent = `NanoDet · analizando ${percent}%`;
   } else {
-    const count = state.personSegments.length;
-    element.textContent = `NanoDet · 1 FPS · ${count} ${count === 1 ? 'tramo' : 'tramos'}`;
+    const count = state.objectSegments.length;
+    const classes = new Set(state.objectSegments.map(segment => segment.class_name)).size;
+    element.textContent = `NanoDet · 1 FPS · ${count} tramos · ${classes} clases`;
   }
-  element.title = 'Detección local de personas con NanoDet-Plus-m 320.';
+  element.title = 'Detección local multiclase con NanoDet-Plus-m 320.';
+}
+
+async function loadAnalyticsSummary({ silent = false, force = false } = {}) {
+  const status = $('#analyticsSummaryStatus');
+  if (!state.recordingCameraID || !state.recordingDate || !status) return;
+  const cacheKey = `${state.recordingCameraID}|${state.recordingDate}`;
+  if (!force && state.analyticsSummaryKey === cacheKey && Date.now() - state.analyticsSummaryFetchedAt < 15000) return;
+  status.textContent = 'Cargando…';
+  status.classList.remove('unavailable');
+  try {
+    const query = new URLSearchParams({
+      camera_id: state.recordingCameraID,
+      date: state.recordingDate,
+      offset_minutes: String(new Date().getTimezoneOffset()),
+    });
+    state.analyticsSummary = await api(`/api/analytics/summary?${query}`);
+    state.analyticsSummaryKey = cacheKey;
+    state.analyticsSummaryFetchedAt = Date.now();
+    renderAnalyticsSummary();
+  } catch (error) {
+    state.analyticsSummary = null;
+    status.textContent = 'No disponible';
+    status.classList.add('unavailable');
+    const grid = $('#analyticsSummaryGrid');
+    const classes = $('#analyticsSummaryClasses');
+    if (grid) grid.replaceChildren();
+    if (classes) classes.replaceChildren();
+    if (!(error instanceof SessionRequiredError) && !silent) setStatus(error.message, false);
+  }
+}
+
+function renderAnalyticsSummary() {
+  const summary = state.analyticsSummary;
+  const status = $('#analyticsSummaryStatus');
+  const grid = $('#analyticsSummaryGrid');
+  const classes = $('#analyticsSummaryClasses');
+  if (!summary || !status || !grid || !classes) return;
+  status.classList.remove('unavailable');
+  status.textContent = summary.total_objects > 0 ? `${summary.total_objects} objetos` : 'Sin actividad';
+  grid.replaceChildren();
+  classes.replaceChildren();
+
+  const busiest = Number(summary.busiest_count) > 0
+    ? `${String(Number(summary.busiest_hour) || 0).padStart(2, '0')}:00`
+    : '—';
+  const stats = [
+    ['Objetos', Number(summary.total_objects) || 0],
+    ['Hora pico', busiest],
+    ['Entradas', Number(summary.zone_entries) || 0],
+    ['Salidas', Number(summary.zone_exits) || 0],
+    ['Cruces', Number(summary.line_crossings) || 0],
+    ['Reglas', Number(summary.rule_matches) || 0],
+  ];
+  for (const [label, value] of stats) {
+    const item = document.createElement('div');
+    const strong = document.createElement('strong');
+    const span = document.createElement('span');
+    strong.textContent = String(value);
+    span.textContent = label;
+    item.append(strong, span);
+    grid.append(item);
+  }
+
+  for (const item of (summary.classes || []).slice(0, 10)) {
+    const chip = document.createElement('span');
+    chip.className = 'analytics-summary-chip';
+    const label = item.label || analyticsClassLabel(item.class_name);
+    chip.textContent = `${label} ${Number(item.count) || 0}`;
+    classes.append(chip);
+  }
+  if (!(summary.classes || []).length) {
+    const empty = document.createElement('span');
+    empty.className = 'analytics-summary-empty';
+    empty.textContent = 'Aún no hay clases detectadas en esta fecha.';
+    classes.append(empty);
+  }
 }
 
 async function reindexAnalytics() {
@@ -970,7 +1063,7 @@ async function reindexAnalytics() {
   button.disabled = true;
   try {
     await api('/api/analytics/reindex', { method: 'POST', body: '{}' });
-    setStatus('Reanálisis de personas agregado a la cola', true);
+    setStatus('Reanálisis multiclase agregado a la cola', true);
     setTimeout(() => loadRecordingAnalytics({ silent: true }), 600);
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
@@ -1010,7 +1103,13 @@ function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = fal
   $('#recordingPlayer').hidden = true;
   const cameraChanged = state.recordingCameraID !== cameraID;
   state.recordingCameraID = cameraID;
-  if (cameraChanged) state.personSegments = [];
+  if (cameraChanged) {
+    state.personSegments = [];
+    state.objectSegments = [];
+    state.analyticsSummary = null;
+    state.analyticsSummaryKey = '';
+    state.analyticsSummaryFetchedAt = 0;
+  }
   if (updateRoute) setBrowserRoute(`/grabaciones/${encodeURIComponent(cameraID)}`);
   const camera = state.cameras.find(item => item.id === cameraID);
   const recordings = recordingsForCamera(cameraID);
@@ -1023,7 +1122,7 @@ function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = fal
   renderRecordingCameraList();
   renderRecordingStats(recordings);
   renderRecordingTimeline(recordings);
-  renderPersonTimeline(recordings);
+  renderObjectTimeline(recordings);
   renderRecordingCards(recordings);
   loadRecordingAnalytics({ silent: true });
 }
@@ -1126,7 +1225,8 @@ function applyDeletedRecordings(cameraID, names) {
   state.recordingStorage.total_bytes = Math.max(0, (Number(state.recordingStorage.total_bytes) || 0) - removedBytes);
   state.recordingStorage.file_count = Math.max(0, (Number(state.recordingStorage.file_count) || 0) - removed.length);
   state.recordings = state.recordings.filter(recording => recording.camera_id !== cameraID || !deleted.has(recording.name));
-  state.personSegments = state.personSegments.filter(segment => segment.camera_id !== cameraID || !deleted.has(segment.recording_name));
+  state.objectSegments = state.objectSegments.filter(segment => segment.camera_id !== cameraID || !deleted.has(segment.recording_name));
+  state.personSegments = state.objectSegments.filter(segment => segment.class_name === 'person');
   if (state.playback.recording?.camera_id === cameraID && deleted.has(state.playback.recording.name)) {
     stopRecordingPlayback();
     $('#recordingPlayer').hidden = true;
@@ -1135,7 +1235,7 @@ function applyDeletedRecordings(cameraID, names) {
   renderRecordingCameraList();
   renderRecordingStats(recordings);
   renderRecordingTimeline(recordings);
-  renderPersonTimeline(recordings);
+  renderObjectTimeline(recordings);
   renderRecordingCards(recordings);
   refreshEvents(false);
 }
@@ -1407,43 +1507,85 @@ function renderRecordingTimeline(recordings) {
   }
 }
 
-function renderPersonTimeline(recordings) {
-  const timeline = $('#personTimeline');
-  if (!timeline) return;
-  timeline.replaceChildren();
+function analyticsClassLabel(className) {
+  const found = state.analyticsClasses.find(item => item.name === className);
+  if (found?.label) return found.label;
+  return String(className || 'Objeto').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function renderObjectTimeline(recordings) {
+  const tracks = $('#analyticsTracks');
+  const labels = $('#analyticsTrackLabels');
+  if (!tracks || !labels) return;
+  tracks.replaceChildren();
+  labels.replaceChildren();
   const bounds = selectedDateBounds();
   if (!bounds) return;
   const byName = new Map(recordings.map(recording => [recording.name, recording]));
-
-  for (const segment of state.personSegments) {
+  const visibleSegments = state.objectSegments.filter(segment => {
     const recording = byName.get(segment.recording_name);
-    if (!recording) continue;
+    if (!recording) return false;
     const recordingStart = new Date(recording.started_at).getTime();
-    if (!Number.isFinite(recordingStart)) continue;
+    if (!Number.isFinite(recordingStart)) return false;
     const start = recordingStart + Math.max(0, Number(segment.start_seconds) || 0) * 1000;
     const end = recordingStart + Math.max(Number(segment.end_seconds) || 0, Number(segment.start_seconds) || 0) * 1000;
-    const geometry = timelineGeometry(start, Math.max(start + 1000, end), bounds);
-    if (!geometry) continue;
+    return end > bounds.start && start < bounds.end;
+  });
+  const classes = [...new Map(visibleSegments.map(segment => [segment.class_name, segment])).values()]
+    .sort((a, b) => (Number(a.class_id) || 0) - (Number(b.class_id) || 0));
 
-    const marker = document.createElement('button');
-    marker.type = 'button';
-    marker.className = 'person-segment';
-    marker.style.left = `${geometry.left}%`;
-    marker.style.width = `${geometry.width}%`;
-    const confidence = Math.round((Number(segment.max_confidence) || 0) * 100);
-    const moment = new Date(recordingStart + (Number(segment.peak_seconds) || 0) * 1000);
-    marker.title = `Persona · ${moment.toLocaleTimeString()} · ${confidence}%`;
-    marker.setAttribute('aria-label', `Abrir detección de persona a las ${moment.toLocaleTimeString()}`);
-    marker.addEventListener('click', () => selectRecording(recording, Number(segment.peak_seconds) || 0));
-    timeline.append(marker);
+  if (!classes.length) {
+    const label = document.createElement('span');
+    label.textContent = 'Objetos';
+    labels.append(label);
+    const empty = document.createElement('div');
+    empty.className = 'analytics-object-track empty';
+    empty.textContent = 'Sin objetos detectados';
+    tracks.append(empty);
+    return;
+  }
+
+  for (const classSegment of classes) {
+    const className = classSegment.class_name;
+    const label = document.createElement('span');
+    label.textContent = analyticsClassLabel(className);
+    label.title = analyticsClassLabel(className);
+    labels.append(label);
+
+    const timeline = document.createElement('div');
+    timeline.className = 'analytics-object-track';
+    timeline.dataset.className = className;
+    for (const segment of visibleSegments.filter(item => item.class_name === className)) {
+      const recording = byName.get(segment.recording_name);
+      const recordingStart = new Date(recording.started_at).getTime();
+      const start = recordingStart + Math.max(0, Number(segment.start_seconds) || 0) * 1000;
+      const end = recordingStart + Math.max(Number(segment.end_seconds) || 0, Number(segment.start_seconds) || 0) * 1000;
+      const geometry = timelineGeometry(start, Math.max(start + 1000, end), bounds);
+      if (!geometry) continue;
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = 'analytics-object-segment';
+      marker.style.left = `${geometry.left}%`;
+      marker.style.width = `${geometry.width}%`;
+      const confidence = Math.round((Number(segment.max_confidence) || 0) * 100);
+      const moment = new Date(recordingStart + (Number(segment.peak_seconds) || 0) * 1000);
+      const title = `${analyticsClassLabel(className)} · ${moment.toLocaleTimeString()} · ${confidence}%`;
+      marker.title = title;
+      marker.setAttribute('aria-label', `Abrir ${title}`);
+      marker.addEventListener('click', () => selectRecording(recording, Number(segment.peak_seconds) || 0));
+      timeline.append(marker);
+    }
+    tracks.append(timeline);
   }
 }
 
-function bestPersonSegmentForRecording(recording) {
+function bestObjectSegmentForRecording(recording) {
   let best = null;
-  for (const segment of state.personSegments) {
+  for (const segment of state.objectSegments) {
     if (segment.camera_id !== recording.camera_id || segment.recording_name !== recording.name) continue;
-    if (!best || Number(segment.max_confidence) > Number(best.max_confidence)) best = segment;
+    const score = Number(segment.best_score) || Number(segment.max_confidence) || 0;
+    const bestValue = best ? (Number(best.best_score) || Number(best.max_confidence) || 0) : -1;
+    if (!best || score > bestValue) best = segment;
   }
   return best;
 }
@@ -1465,18 +1607,18 @@ function renderRecordingCards(recordings) {
     const card = document.createElement('article');
     card.className = 'recording-card';
     card.classList.toggle('active', state.playback.recording?.name === recording.name && state.playback.recording?.camera_id === recording.camera_id);
-    const personSegment = bestPersonSegmentForRecording(recording);
+    const objectSegment = bestObjectSegmentForRecording(recording);
     const preview = document.createElement('button');
     preview.type = 'button';
     preview.className = 'recording-preview loading';
     const image = document.createElement('img');
     const fallback = document.createElement('div');
     const play = document.createElement('span');
-    image.alt = personSegment
-      ? `Persona detectada en la grabación ${new Date(recording.started_at).toLocaleString()}`
+    image.alt = objectSegment
+      ? `${analyticsClassLabel(objectSegment.class_name)} detectado en la grabación ${new Date(recording.started_at).toLocaleString()}`
       : `Miniatura de grabación ${new Date(recording.started_at).toLocaleString()}`;
     image.loading = 'lazy';
-    image.src = recordingSnapshotURL(recording, personSegment?.peak_seconds);
+    image.src = recordingSnapshotURL(recording, objectSegment?.peak_seconds);
     fallback.className = 'recording-preview-fallback';
     fallback.hidden = true;
     fallback.innerHTML = '<span aria-hidden="true">◫</span><strong>Sin miniatura</strong>';
@@ -1485,7 +1627,7 @@ function renderRecordingCards(recordings) {
     let thumbnailFallbackTried = false;
     image.addEventListener('load', () => preview.classList.remove('loading'));
     image.addEventListener('error', () => {
-      if (personSegment && !thumbnailFallbackTried) {
+      if (objectSegment && !thumbnailFallbackTried) {
         thumbnailFallbackTried = true;
         image.src = recordingSnapshotURL(recording);
         return;
@@ -1495,10 +1637,10 @@ function renderRecordingCards(recordings) {
       fallback.hidden = false;
     });
     preview.append(image, fallback, play);
-    if (personSegment) {
+    if (objectSegment) {
       const badge = document.createElement('span');
-      badge.className = 'recording-person-badge';
-      badge.textContent = `PERSONA ${Math.round((Number(personSegment.max_confidence) || 0) * 100)}%`;
+      badge.className = 'recording-object-badge';
+      badge.textContent = `${analyticsClassLabel(objectSegment.class_name).toUpperCase()} ${Math.round((Number(objectSegment.max_confidence) || 0) * 100)}%`;
       preview.append(badge);
     }
     if (recording.active) {
@@ -1564,7 +1706,7 @@ async function selectRecording(recording, offset = 0) {
   startRecordingPlayback(recording, offset);
   renderRecordingStats(recordingsForCamera(recording.camera_id));
   renderRecordingTimeline(recordingsForCamera(recording.camera_id));
-  renderPersonTimeline(recordingsForCamera(recording.camera_id));
+  renderObjectTimeline(recordingsForCamera(recording.camera_id));
   renderRecordingCards(recordingsForCamera(recording.camera_id));
   $('#recordingPlayer').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -1688,13 +1830,18 @@ async function refreshEvents(updateStatus = true) {
 }
 
 function eventKey(event) {
-  return [event.camera_id, event.time, event.topic || '', event.data?.State || ''].join('|');
+  return [
+    event.camera_id, event.time, event.topic || '', event.data?.State || '',
+    event.object_class || '', event.zone_name || '', event.line_name || '', event.direction || '',
+  ].join('|');
 }
 
 function eventRecordingSnapshotURL(event, attempt = 0) {
   if (!event.recording_name) return '';
+  const hasObject = Number(event.object_confidence) > 0;
   const hasPerson = Number(event.person_confidence) > 0;
-  const offset = Math.max(0, Number(hasPerson ? event.person_offset : event.recording_offset) || 0);
+  const offsetValue = hasObject ? event.object_offset : (hasPerson ? event.person_offset : event.recording_offset);
+  const offset = Math.max(0, Number(offsetValue) || 0);
   return `/api/recordings/${encodeURIComponent(event.camera_id)}/${encodeURIComponent(event.recording_name)}/snapshot?at=${offset.toFixed(3)}&r=${attempt}`;
 }
 
@@ -1703,7 +1850,14 @@ function eventCameraSnapshotURL(event) {
 }
 
 function eventThumbnailFingerprint(event) {
-  return [event.recording_name || '', Number(event.person_offset) || 0, Number(event.person_confidence) || 0].join('|');
+  return [
+    event.recording_name || '',
+    Number(event.object_offset) || 0,
+    Number(event.object_confidence) || 0,
+    Number(event.person_offset) || 0,
+    Number(event.person_confidence) || 0,
+    event.smart_type || '',
+  ].join('|');
 }
 
 function loadEventThumbnail(image, event) {
@@ -1733,13 +1887,27 @@ function loadEventThumbnail(image, event) {
 
 function openEventRecording(event) {
   if (!event.recording_name) return;
+  const offsetValue = Number(event.object_confidence) > 0
+    ? event.object_offset
+    : (Number(event.person_confidence) > 0 ? event.person_offset : event.recording_offset);
   state.pendingPlayback = {
     cameraID: event.camera_id,
     recordingName: event.recording_name,
-    offset: Math.max(0, Number(event.recording_offset) || 0),
+    offset: Math.max(0, Number(offsetValue) || 0),
   };
   state.recordingCameraID = event.camera_id;
   navigate('recordings', { path: `/grabaciones/${encodeURIComponent(event.camera_id)}` });
+}
+
+function smartEventLabel(event) {
+  if (!event.object_class) return (event.topic || 'Evento').split('/').pop() || 'Evento';
+  const object = analyticsClassLabel(event.object_class);
+  switch (event.smart_type) {
+    case 'zone_enter': return `${object} · entró en ${event.zone_name || 'zona'}`;
+    case 'zone_exit': return `${object} · salió de ${event.zone_name || 'zona'}`;
+    case 'line_cross': return `${object} · cruzó ${event.line_name || 'línea'}${event.direction ? ` · ${event.direction}` : ''}`;
+    default: return `${object} detectado`;
+  }
 }
 
 function createEventCard(event) {
@@ -1768,10 +1936,11 @@ function createEventCard(event) {
   camera.textContent = event.camera_name;
   const topic = document.createElement('span');
   topic.className = 'event-topic';
-  topic.textContent = (event.topic || 'Evento').split('/').pop() || 'Evento';
+  topic.textContent = smartEventLabel(event);
   const details = document.createElement('span');
   details.className = 'event-detail';
-  const score = event.data?.Score ? ` · nivel ${Math.round(Number(event.data.Score) * 100)}%` : '';
+  const confidence = Number(event.object_confidence) || Number(event.person_confidence) || Number(event.data?.Score) || 0;
+  const score = confidence > 0 ? ` · ${Math.round(confidence * 100)}%` : '';
   details.textContent = `${new Date(event.time).toLocaleString()}${score}`;
   body.append(camera, topic, details);
 
@@ -1780,7 +1949,10 @@ function createEventCard(event) {
   if (event.recording_name) {
     const action = document.createElement('span');
     action.className = 'event-jump';
-    action.textContent = `▶ ${formatClock(event.recording_offset || 0)}`;
+    const jumpOffset = Number(event.object_confidence) > 0
+      ? event.object_offset
+      : (Number(event.person_confidence) > 0 ? event.person_offset : event.recording_offset);
+    action.textContent = `▶ ${formatClock(jumpOffset || 0)}`;
     side.append(action);
   }
   if (event.recording_trigger) {
@@ -2211,6 +2383,463 @@ async function deleteTelegramIntegration() {
   }
 }
 
+function cloneAnalyticsConfig(config) {
+  return JSON.parse(JSON.stringify(config || { enabled_classes: [], zones: [], lines: [], rules: [] }));
+}
+
+function analyticsClientID(prefix) {
+  if (window.crypto?.randomUUID) return `${prefix}${window.crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function openAnalyticsDialog(camera) {
+  const dialog = $('#analyticsDialog');
+  state.analyticsCameraID = camera.id;
+  state.analyticsDrawing = null;
+  state.analyticsRuleEditIndex = -1;
+  $('#analyticsDialogTitle').textContent = `Analítica · ${camera.name}`;
+  $('#analyticsDialogSubtitle').textContent = 'Elige clases, dibuja zonas/líneas y combina reglas sin añadir otra inferencia.';
+  $('#analyticsConfigError').textContent = '';
+  $('#analyticsConfigMessage').textContent = '';
+  $('#analyticsClassSearch').value = '';
+  $('#analyticsConfigLoading').hidden = false;
+  $('#analyticsConfigContent').hidden = true;
+  $('#analyticsSaveBtn').disabled = true;
+  dialog.showModal();
+  try {
+    const cameraID = encodeURIComponent(camera.id);
+    const [classes, config] = await Promise.all([
+      state.analyticsClasses.length ? Promise.resolve(state.analyticsClasses) : api('/api/analytics/classes'),
+      api(`/api/analytics/config/${cameraID}`),
+    ]);
+    state.analyticsClasses = classes || [];
+    state.analyticsConfig = cloneAnalyticsConfig(config);
+    $('#analyticsPreviewImage').src = `/api/cameras/${cameraID}/snapshot?v=${Date.now()}`;
+    $('#analyticsConfigLoading').hidden = true;
+    $('#analyticsConfigContent').hidden = false;
+    $('#analyticsSaveBtn').disabled = false;
+    renderAnalyticsConfig();
+    resetAnalyticsRuleEditor();
+  } catch (error) {
+    $('#analyticsConfigLoading').hidden = true;
+    if (!(error instanceof SessionRequiredError)) $('#analyticsConfigError').textContent = error.message;
+  }
+}
+
+function renderAnalyticsConfig() {
+  renderAnalyticsClassList();
+  renderAnalyticsGeometryLists();
+  renderAnalyticsOverlay();
+  renderAnalyticsRuleSelectors();
+  renderAnalyticsRules();
+}
+
+function analyticsGroupLabel(group) {
+  const labels = { personas: 'Personas', 'vehículos': 'Vehículos', animales: 'Animales', objetos: 'Objetos' };
+  return labels[group] || group || 'Objetos';
+}
+
+function renderAnalyticsClassList() {
+  const list = $('#analyticsClassList');
+  if (!list || !state.analyticsConfig) return;
+  list.replaceChildren();
+  const query = $('#analyticsClassSearch').value.trim().toLowerCase();
+  const enabled = new Set(state.analyticsConfig.enabled_classes || []);
+  const groups = new Map();
+  for (const item of state.analyticsClasses) {
+    const label = item.label || item.name;
+    const haystack = `${label} ${item.name} ${item.group}`.toLowerCase();
+    if (query && !haystack.includes(query)) continue;
+    const group = analyticsGroupLabel(item.group);
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(item);
+  }
+  for (const [groupName, items] of groups) {
+    const section = document.createElement('section');
+    section.className = 'analytics-class-group';
+    const title = document.createElement('strong');
+    title.textContent = groupName;
+    const grid = document.createElement('div');
+    grid.className = 'analytics-class-grid';
+    for (const item of items) {
+      const label = document.createElement('label');
+      label.className = 'analytics-class-option';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = enabled.has(item.name);
+      input.addEventListener('change', () => {
+        const set = new Set(state.analyticsConfig.enabled_classes || []);
+        if (input.checked) set.add(item.name); else set.delete(item.name);
+        state.analyticsConfig.enabled_classes = [...set];
+        $('#analyticsClassCount').textContent = String(set.size);
+        renderAnalyticsRuleSelectors();
+      });
+      const copy = document.createElement('span');
+      const strong = document.createElement('strong');
+      const small = document.createElement('small');
+      strong.textContent = item.label || item.name;
+      small.textContent = item.name;
+      copy.append(strong, small);
+      label.append(input, copy);
+      grid.append(label);
+    }
+    section.append(title, grid);
+    list.append(section);
+  }
+  $('#analyticsClassCount').textContent = String(enabled.size);
+  if (!groups.size) {
+    const empty = document.createElement('p');
+    empty.className = 'hint analytics-inline-empty';
+    empty.textContent = 'No hay clases que coincidan con la búsqueda.';
+    list.append(empty);
+  }
+}
+
+function renderAnalyticsGeometryLists() {
+  if (!state.analyticsConfig) return;
+  const zoneList = $('#analyticsZoneList');
+  const lineList = $('#analyticsLineList');
+  zoneList.replaceChildren();
+  lineList.replaceChildren();
+  const renderItem = (item, index, type) => {
+    const row = document.createElement('div');
+    row.className = 'analytics-geometry-item';
+    const input = document.createElement('input');
+    input.value = item.name || `${type === 'zone' ? 'Zona' : 'Línea'} ${index + 1}`;
+    input.maxLength = 64;
+    input.setAttribute('aria-label', `Nombre de ${type === 'zone' ? 'zona' : 'línea'}`);
+    input.addEventListener('input', () => { item.name = input.value.slice(0, 64); renderAnalyticsOverlay(); renderAnalyticsRuleSelectors(); });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'icon-button';
+    remove.textContent = '×';
+    remove.title = `Eliminar ${type === 'zone' ? 'zona' : 'línea'}`;
+    remove.addEventListener('click', () => {
+      const collection = type === 'zone' ? state.analyticsConfig.zones : state.analyticsConfig.lines;
+      const removedID = collection[index]?.id;
+      collection.splice(index, 1);
+      state.analyticsConfig.rules = (state.analyticsConfig.rules || []).filter(rule => type === 'zone' ? rule.zone_id !== removedID : rule.line_id !== removedID);
+      renderAnalyticsGeometryLists();
+      renderAnalyticsOverlay();
+      renderAnalyticsRuleSelectors();
+      renderAnalyticsRules();
+      resetAnalyticsRuleEditor();
+    });
+    row.append(input, remove);
+    return row;
+  };
+  (state.analyticsConfig.zones || []).forEach((zone, index) => zoneList.append(renderItem(zone, index, 'zone')));
+  (state.analyticsConfig.lines || []).forEach((line, index) => lineList.append(renderItem(line, index, 'line')));
+  $('#analyticsZoneCount').textContent = String((state.analyticsConfig.zones || []).length);
+  $('#analyticsLineCount').textContent = String((state.analyticsConfig.lines || []).length);
+  if (!state.analyticsConfig.zones?.length) {
+    const empty = document.createElement('span'); empty.className = 'hint'; empty.textContent = 'Sin zonas'; zoneList.append(empty);
+  }
+  if (!state.analyticsConfig.lines?.length) {
+    const empty = document.createElement('span'); empty.className = 'hint'; empty.textContent = 'Sin líneas'; lineList.append(empty);
+  }
+}
+
+function svgPoint(point) {
+  return `${Math.round(point.x * 1000)},${Math.round(point.y * 1000)}`;
+}
+
+function renderAnalyticsOverlay() {
+  const svg = $('#analyticsOverlay');
+  if (!svg || !state.analyticsConfig) return;
+  svg.replaceChildren();
+  const ns = 'http://www.w3.org/2000/svg';
+  for (const zone of state.analyticsConfig.zones || []) {
+    const polygon = document.createElementNS(ns, 'polygon');
+    polygon.setAttribute('points', (zone.points || []).map(svgPoint).join(' '));
+    polygon.setAttribute('class', 'analytics-zone-shape');
+    svg.append(polygon);
+    if (zone.points?.length) {
+      const label = document.createElementNS(ns, 'text');
+      label.setAttribute('x', String(zone.points[0].x * 1000 + 10));
+      label.setAttribute('y', String(zone.points[0].y * 1000 + 28));
+      label.setAttribute('class', 'analytics-overlay-label');
+      label.textContent = zone.name || 'Zona';
+      svg.append(label);
+    }
+  }
+  for (const line of state.analyticsConfig.lines || []) {
+    const element = document.createElementNS(ns, 'line');
+    element.setAttribute('x1', String(line.a.x * 1000));
+    element.setAttribute('y1', String(line.a.y * 1000));
+    element.setAttribute('x2', String(line.b.x * 1000));
+    element.setAttribute('y2', String(line.b.y * 1000));
+    element.setAttribute('class', 'analytics-line-shape');
+    svg.append(element);
+    const label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', String((line.a.x + line.b.x) * 500 + 10));
+    label.setAttribute('y', String((line.a.y + line.b.y) * 500 - 10));
+    label.setAttribute('class', 'analytics-overlay-label');
+    label.textContent = line.name || 'Línea';
+    svg.append(label);
+  }
+  const drawing = state.analyticsDrawing;
+  if (drawing?.points?.length) {
+    const preview = document.createElementNS(ns, 'polyline');
+    preview.setAttribute('points', drawing.points.map(svgPoint).join(' '));
+    preview.setAttribute('class', 'analytics-drawing-shape');
+    svg.append(preview);
+    for (const point of drawing.points) {
+      const dot = document.createElementNS(ns, 'circle');
+      dot.setAttribute('cx', String(point.x * 1000));
+      dot.setAttribute('cy', String(point.y * 1000));
+      dot.setAttribute('r', '10');
+      dot.setAttribute('class', 'analytics-drawing-point');
+      svg.append(dot);
+    }
+  }
+}
+
+function startAnalyticsDrawing(type) {
+  state.analyticsDrawing = { type, points: [] };
+  $('#analyticsDrawZoneBtn').disabled = true;
+  $('#analyticsDrawLineBtn').disabled = true;
+  $('#analyticsCancelDrawBtn').hidden = false;
+  $('#analyticsFinishDrawBtn').hidden = type !== 'zone';
+  $('#analyticsFinishDrawBtn').disabled = true;
+  $('#analyticsDrawHint').textContent = type === 'zone'
+    ? 'Toca al menos 3 puntos para formar el polígono y luego pulsa Terminar.'
+    : 'Toca dos puntos para crear la línea de cruce.';
+  $('#analyticsPreviewWrap').classList.add('drawing');
+  renderAnalyticsOverlay();
+}
+
+function cancelAnalyticsDrawing() {
+  state.analyticsDrawing = null;
+  $('#analyticsDrawZoneBtn').disabled = false;
+  $('#analyticsDrawLineBtn').disabled = false;
+  $('#analyticsCancelDrawBtn').hidden = true;
+  $('#analyticsFinishDrawBtn').hidden = true;
+  $('#analyticsFinishDrawBtn').disabled = true;
+  $('#analyticsPreviewWrap').classList.remove('drawing');
+  $('#analyticsDrawHint').textContent = 'Dibuja zonas o líneas sobre la imagen. Las coordenadas se guardan normalizadas, por lo que siguen funcionando aunque cambie el tamaño de pantalla.';
+  renderAnalyticsOverlay();
+}
+
+function finishAnalyticsDrawing() {
+  const drawing = state.analyticsDrawing;
+  if (!drawing || !state.analyticsConfig) return;
+  if (drawing.type === 'zone') {
+    if (drawing.points.length < 3) return;
+    state.analyticsConfig.zones ||= [];
+    state.analyticsConfig.zones.push({ id: analyticsClientID('z'), name: `Zona ${state.analyticsConfig.zones.length + 1}`, points: drawing.points });
+  } else if (drawing.type === 'line' && drawing.points.length >= 2) {
+    state.analyticsConfig.lines ||= [];
+    state.analyticsConfig.lines.push({ id: analyticsClientID('l'), name: `Línea ${state.analyticsConfig.lines.length + 1}`, a: drawing.points[0], b: drawing.points[1] });
+  }
+  cancelAnalyticsDrawing();
+  renderAnalyticsGeometryLists();
+  renderAnalyticsRuleSelectors();
+  renderAnalyticsRules();
+}
+
+function handleAnalyticsOverlayPoint(event) {
+  const drawing = state.analyticsDrawing;
+  if (!drawing) return;
+  const rect = $('#analyticsOverlay').getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const point = {
+    x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+    y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+  };
+  drawing.points.push(point);
+  renderAnalyticsOverlay();
+  if (drawing.type === 'zone') {
+    $('#analyticsFinishDrawBtn').disabled = drawing.points.length < 3;
+  } else if (drawing.points.length >= 2) {
+    finishAnalyticsDrawing();
+  }
+}
+
+function renderAnalyticsRuleSelectors() {
+  if (!state.analyticsConfig) return;
+  const classSelect = $('#analyticsRuleClass');
+  const zoneSelect = $('#analyticsRuleZone');
+  const lineSelect = $('#analyticsRuleLine');
+  const previousClass = classSelect.value;
+  const previousZone = zoneSelect.value;
+  const previousLine = lineSelect.value;
+  classSelect.replaceChildren();
+  const all = document.createElement('option'); all.value = '*'; all.textContent = 'Cualquier objeto'; classSelect.append(all);
+  const enabled = new Set(state.analyticsConfig.enabled_classes || []);
+  for (const item of state.analyticsClasses.filter(item => enabled.has(item.name))) {
+    const option = document.createElement('option'); option.value = item.name; option.textContent = item.label || item.name; classSelect.append(option);
+  }
+  zoneSelect.replaceChildren();
+  for (const zone of state.analyticsConfig.zones || []) {
+    const option = document.createElement('option'); option.value = zone.id; option.textContent = zone.name; zoneSelect.append(option);
+  }
+  lineSelect.replaceChildren();
+  for (const line of state.analyticsConfig.lines || []) {
+    const option = document.createElement('option'); option.value = line.id; option.textContent = line.name; lineSelect.append(option);
+  }
+  if ([...classSelect.options].some(option => option.value === previousClass)) classSelect.value = previousClass;
+  if ([...zoneSelect.options].some(option => option.value === previousZone)) zoneSelect.value = previousZone;
+  if ([...lineSelect.options].some(option => option.value === previousLine)) lineSelect.value = previousLine;
+  syncAnalyticsRuleTypeFields();
+}
+
+function syncAnalyticsRuleTypeFields() {
+  const type = $('#analyticsRuleType').value;
+  $('#analyticsRuleZoneField').hidden = type !== 'zone_enter' && type !== 'zone_exit';
+  $('#analyticsRuleLineField').hidden = type !== 'line_cross';
+}
+
+function resetAnalyticsRuleEditor() {
+  state.analyticsRuleEditIndex = -1;
+  $('#analyticsRuleName').value = '';
+  $('#analyticsRuleClass').value = '*';
+  $('#analyticsRuleType').value = 'object';
+  $('#analyticsRuleStart').value = '';
+  $('#analyticsRuleEnd').value = '';
+  $('#analyticsRuleCooldown').value = '30';
+  $('#analyticsRuleTelegram').checked = false;
+  for (const input of $$('#analyticsRuleDays input[type="checkbox"]')) input.checked = false;
+  $('#analyticsRuleAddBtn').textContent = 'Agregar regla';
+  syncAnalyticsRuleTypeFields();
+}
+
+function editAnalyticsRule(index) {
+  const rule = state.analyticsConfig?.rules?.[index];
+  if (!rule) return;
+  state.analyticsRuleEditIndex = index;
+  renderAnalyticsRuleSelectors();
+  $('#analyticsRuleName').value = rule.name || '';
+  $('#analyticsRuleClass').value = rule.class_name || '*';
+  $('#analyticsRuleType').value = rule.event_type || 'object';
+  $('#analyticsRuleZone').value = rule.zone_id || '';
+  $('#analyticsRuleLine').value = rule.line_id || '';
+  $('#analyticsRuleStart').value = rule.start || '';
+  $('#analyticsRuleEnd').value = rule.end || '';
+  $('#analyticsRuleCooldown').value = String(rule.cooldown_seconds || 30);
+  $('#analyticsRuleTelegram').checked = Boolean(rule.telegram);
+  const days = new Set((rule.days || []).map(Number));
+  for (const input of $$('#analyticsRuleDays input[type="checkbox"]')) input.checked = days.has(Number(input.value));
+  $('#analyticsRuleAddBtn').textContent = 'Guardar regla';
+  syncAnalyticsRuleTypeFields();
+}
+
+function renderAnalyticsRules() {
+  const list = $('#analyticsRuleList');
+  if (!list || !state.analyticsConfig) return;
+  list.replaceChildren();
+  const rules = state.analyticsConfig.rules || [];
+  $('#analyticsRuleCount').textContent = String(rules.length);
+  rules.forEach((rule, index) => {
+    const row = document.createElement('div');
+    row.className = 'analytics-rule-item';
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.checked = rule.enabled !== false;
+    enabled.title = 'Regla activa';
+    enabled.addEventListener('change', () => { rule.enabled = enabled.checked; });
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'analytics-rule-copy';
+    const strong = document.createElement('strong');
+    const small = document.createElement('small');
+    strong.textContent = rule.name || 'Regla';
+    const target = rule.zone_id
+      ? state.analyticsConfig.zones?.find(zone => zone.id === rule.zone_id)?.name
+      : state.analyticsConfig.lines?.find(line => line.id === rule.line_id)?.name;
+    small.textContent = `${rule.class_name === '*' ? 'Cualquier objeto' : analyticsClassLabel(rule.class_name)} · ${target || rule.event_type}`;
+    copy.append(strong, small);
+    copy.addEventListener('click', () => editAnalyticsRule(index));
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'icon-button'; remove.textContent = '×'; remove.title = 'Eliminar regla';
+    remove.addEventListener('click', () => { rules.splice(index, 1); renderAnalyticsRules(); resetAnalyticsRuleEditor(); });
+    row.append(enabled, copy, remove);
+    list.append(row);
+  });
+  if (!rules.length) {
+    const empty = document.createElement('p'); empty.className = 'hint analytics-inline-empty'; empty.textContent = 'Sin reglas configuradas.'; list.append(empty);
+  }
+}
+
+function saveAnalyticsRuleDraft() {
+  if (!state.analyticsConfig) return;
+  const name = $('#analyticsRuleName').value.trim();
+  const className = $('#analyticsRuleClass').value;
+  const eventType = $('#analyticsRuleType').value;
+  const start = $('#analyticsRuleStart').value;
+  const end = $('#analyticsRuleEnd').value;
+  const cooldown = Number($('#analyticsRuleCooldown').value) || 30;
+  const errorBox = $('#analyticsConfigError');
+  errorBox.textContent = '';
+  if (!name) { errorBox.textContent = 'Escribe un nombre para la regla.'; return; }
+  if ((start && !end) || (!start && end)) { errorBox.textContent = 'Completa ambas horas o deja ambas vacías.'; return; }
+  const zoneID = eventType === 'zone_enter' || eventType === 'zone_exit' ? $('#analyticsRuleZone').value : '';
+  const lineID = eventType === 'line_cross' ? $('#analyticsRuleLine').value : '';
+  if ((eventType === 'zone_enter' || eventType === 'zone_exit') && !zoneID) { errorBox.textContent = 'Crea y selecciona una zona para esta regla.'; return; }
+  if (eventType === 'line_cross' && !lineID) { errorBox.textContent = 'Crea y selecciona una línea para esta regla.'; return; }
+  const days = $$('#analyticsRuleDays input[type="checkbox"]:checked').map(input => Number(input.value));
+  const existing = state.analyticsRuleEditIndex >= 0 ? state.analyticsConfig.rules[state.analyticsRuleEditIndex] : null;
+  const rule = {
+    id: existing?.id || analyticsClientID('r'),
+    name,
+    enabled: existing?.enabled !== false,
+    class_name: className,
+    event_type: eventType,
+    zone_id: zoneID,
+    line_id: lineID,
+    start,
+    end,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local',
+    days,
+    telegram: $('#analyticsRuleTelegram').checked,
+    cooldown_seconds: Math.max(1, Math.min(3600, cooldown)),
+  };
+  state.analyticsConfig.rules ||= [];
+  if (state.analyticsRuleEditIndex >= 0) state.analyticsConfig.rules[state.analyticsRuleEditIndex] = rule;
+  else state.analyticsConfig.rules.push(rule);
+  renderAnalyticsRules();
+  resetAnalyticsRuleEditor();
+}
+
+async function saveAnalyticsConfig(event) {
+  event.preventDefault();
+  if (!state.analyticsConfig || !state.analyticsCameraID) return;
+  if (state.analyticsDrawing) {
+    $('#analyticsConfigError').textContent = 'Termina o cancela el dibujo antes de guardar.';
+    return;
+  }
+  if (!(state.analyticsConfig.enabled_classes || []).length) {
+    $('#analyticsConfigError').textContent = 'Selecciona al menos una clase para detectar.';
+    return;
+  }
+  const unnamedGeometry = [...(state.analyticsConfig.zones || []), ...(state.analyticsConfig.lines || [])].some(item => !String(item.name || '').trim());
+  if (unnamedGeometry) {
+    $('#analyticsConfigError').textContent = 'Todas las zonas y líneas necesitan un nombre.';
+    return;
+  }
+  const button = $('#analyticsSaveBtn');
+  button.disabled = true;
+  $('#analyticsConfigError').textContent = '';
+  $('#analyticsConfigMessage').textContent = 'Guardando…';
+  try {
+    const saved = await api(`/api/analytics/config/${encodeURIComponent(state.analyticsCameraID)}`, {
+      method: 'PUT', body: JSON.stringify(state.analyticsConfig),
+    });
+    state.analyticsConfig = cloneAnalyticsConfig(saved);
+    $('#analyticsConfigMessage').textContent = 'Guardado';
+    $('#analyticsDialog').close('saved');
+    setStatus('Analítica inteligente actualizada; el histórico de esta cámara se reanalizará.', true);
+    if (state.recordingCameraID === state.analyticsCameraID) {
+      state.objectSegments = [];
+      setTimeout(() => loadRecordingAnalytics({ silent: true }), 700);
+    }
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) $('#analyticsConfigError').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function discover() {
   const button = $('#discoverBtn');
   const status = $('#discoveryStatus');
@@ -2274,6 +2903,22 @@ function confirmAction({ title, message, confirmLabel = 'Confirmar' }) {
     confirmDialog.addEventListener('close', () => resolve(confirmDialog.returnValue === 'confirm'), { once: true });
   });
 }
+
+$('#analyticsConfigForm').addEventListener('submit', saveAnalyticsConfig);
+$('#analyticsClassSearch').addEventListener('input', renderAnalyticsClassList);
+$('#analyticsDrawZoneBtn').addEventListener('click', () => startAnalyticsDrawing('zone'));
+$('#analyticsDrawLineBtn').addEventListener('click', () => startAnalyticsDrawing('line'));
+$('#analyticsFinishDrawBtn').addEventListener('click', finishAnalyticsDrawing);
+$('#analyticsCancelDrawBtn').addEventListener('click', cancelAnalyticsDrawing);
+$('#analyticsOverlay').addEventListener('click', handleAnalyticsOverlayPoint);
+$('#analyticsRuleType').addEventListener('change', syncAnalyticsRuleTypeFields);
+$('#analyticsRuleAddBtn').addEventListener('click', saveAnalyticsRuleDraft);
+$('#analyticsRuleResetBtn').addEventListener('click', resetAnalyticsRuleEditor);
+$('#analyticsDialog').addEventListener('close', () => {
+  state.analyticsDrawing = null;
+  state.analyticsCameraID = '';
+  $('#analyticsPreviewImage').removeAttribute('src');
+});
 
 $('#scheduleEnabled').addEventListener('change', syncScheduleFormState);
 
@@ -2427,7 +3072,8 @@ $('#recordingDate').addEventListener('change', (event) => {
   state.recordingDate = event.target.value;
   const recordings = recordingsForCamera(state.recordingCameraID);
   renderRecordingTimeline(recordings);
-  renderPersonTimeline(recordings);
+  renderObjectTimeline(recordings);
+  loadAnalyticsSummary({ silent: true, force: true });
   updateRecordingDeleteAction();
 });
 $('#recordingPlayPause').addEventListener('click', toggleRecordingPlayback);

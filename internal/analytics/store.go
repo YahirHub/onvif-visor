@@ -37,6 +37,7 @@ type PersonSegment struct {
 	EndSecond     float64 `json:"end_seconds"`
 	PeakSecond    float64 `json:"peak_seconds"`
 	MaxConfidence float64 `json:"max_confidence"`
+	BestScore     float64 `json:"best_score"`
 	Source        string  `json:"source"`
 }
 
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS person_segments (
     end_seconds REAL NOT NULL,
     peak_seconds REAL NOT NULL,
     max_confidence REAL NOT NULL,
+    best_score REAL NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'offline'
 );
 CREATE INDEX IF NOT EXISTS idx_person_segments_camera_recording
@@ -85,11 +87,49 @@ CREATE INDEX IF NOT EXISTS idx_recording_analysis_status
 		db.Close()
 		return nil, fmt.Errorf("migrate analytics sqlite: %w", err)
 	}
+	if err := ensureAnalyticsColumn(db, "person_segments", "best_score", "REAL NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrateSmartSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("chmod analytics sqlite: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+func ensureAnalyticsColumn(db *sql.DB, table, column, definition string) error {
+	if table != "person_segments" || column != "best_score" || definition != "REAL NOT NULL DEFAULT 0" {
+		return errors.New("unsupported analytics migration")
+	}
+	rows, err := db.Query(`PRAGMA table_info(person_segments)`)
+	if err != nil {
+		return fmt.Errorf("inspect analytics schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE person_segments ADD COLUMN best_score REAL NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("migrate analytics best score: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -136,8 +176,8 @@ func (s *Store) Complete(ctx context.Context, analysis RecordingAnalysis, segmen
 		return fmt.Errorf("replace analytics segments: %w", err)
 	}
 	for _, segment := range segments {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO person_segments(camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, source) VALUES(?,?,?,?,?,?,?)`,
-			analysis.CameraID, analysis.RecordingName, segment.StartSecond, segment.EndSecond, segment.PeakSecond, segment.MaxConfidence, segment.Source); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO person_segments(camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, best_score, source) VALUES(?,?,?,?,?,?,?,?)`,
+			analysis.CameraID, analysis.RecordingName, segment.StartSecond, segment.EndSecond, segment.PeakSecond, segment.MaxConfidence, segment.BestScore, segment.Source); err != nil {
 			return fmt.Errorf("insert analytics segment: %w", err)
 		}
 	}
@@ -168,7 +208,7 @@ ON CONFLICT(camera_id, recording_name) DO UPDATE SET status='error', model=exclu
 	return err
 }
 
-func (s *Store) UpsertLiveDetection(ctx context.Context, cameraID, recordingName string, offset, confidence float64) error {
+func (s *Store) UpsertLiveDetection(ctx context.Context, cameraID, recordingName string, offset, confidence, bestScore float64) error {
 	const mergeGap = 3.0
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -176,8 +216,8 @@ func (s *Store) UpsertLiveDetection(ctx context.Context, cameraID, recordingName
 	}
 	defer tx.Rollback()
 	var id int64
-	var end, peak, maxConfidence float64
-	err = tx.QueryRowContext(ctx, `SELECT id, end_seconds, peak_seconds, max_confidence FROM person_segments WHERE camera_id=? AND recording_name=? ORDER BY end_seconds DESC LIMIT 1`, cameraID, recordingName).Scan(&id, &end, &peak, &maxConfidence)
+	var end, peak, maxConfidence, currentBestScore float64
+	err = tx.QueryRowContext(ctx, `SELECT id, end_seconds, peak_seconds, max_confidence, best_score FROM person_segments WHERE camera_id=? AND recording_name=? ORDER BY end_seconds DESC LIMIT 1`, cameraID, recordingName).Scan(&id, &end, &peak, &maxConfidence, &currentBestScore)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -188,13 +228,16 @@ func (s *Store) UpsertLiveDetection(ctx context.Context, cameraID, recordingName
 		}
 		if confidence > maxConfidence {
 			maxConfidence = confidence
+		}
+		if bestScore > currentBestScore {
+			currentBestScore = bestScore
 			peak = offset
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE person_segments SET end_seconds=?, peak_seconds=?, max_confidence=?, source='live' WHERE id=?`, segmentEnd, peak, maxConfidence, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE person_segments SET end_seconds=?, peak_seconds=?, max_confidence=?, best_score=?, source='live' WHERE id=?`, segmentEnd, peak, maxConfidence, currentBestScore, id); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO person_segments(camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, source) VALUES(?,?,?,?,?,?,'live')`, cameraID, recordingName, offset, segmentEnd, offset, confidence); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO person_segments(camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, best_score, source) VALUES(?,?,?,?,?,?,?,'live')`, cameraID, recordingName, offset, segmentEnd, offset, confidence, bestScore); err != nil {
 			return err
 		}
 	}
@@ -210,6 +253,12 @@ func (s *Store) DeleteRecording(ctx context.Context, cameraID, recordingName str
 	if _, err := tx.ExecContext(ctx, `DELETE FROM person_segments WHERE camera_id=? AND recording_name=?`, cameraID, recordingName); err != nil {
 		return fmt.Errorf("delete person segments: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM object_segments WHERE camera_id=? AND recording_name=?`, cameraID, recordingName); err != nil {
+		return fmt.Errorf("delete object segments: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM smart_events WHERE camera_id=? AND recording_name=?`, cameraID, recordingName); err != nil {
+		return fmt.Errorf("delete smart events: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM recording_analysis WHERE camera_id=? AND recording_name=?`, cameraID, recordingName); err != nil {
 		return fmt.Errorf("delete recording analysis: %w", err)
 	}
@@ -220,7 +269,7 @@ func (s *Store) DeleteRecording(ctx context.Context, cameraID, recordingName str
 }
 
 func (s *Store) Segments(ctx context.Context, cameraID string) ([]PersonSegment, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, source FROM person_segments WHERE camera_id=? ORDER BY recording_name DESC, start_seconds ASC`, cameraID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, camera_id, recording_name, start_seconds, end_seconds, peak_seconds, max_confidence, best_score, source FROM object_segments WHERE camera_id=? AND class_name='person' ORDER BY recording_name DESC, start_seconds ASC`, cameraID)
 	if err != nil {
 		return nil, fmt.Errorf("query person segments: %w", err)
 	}
@@ -228,7 +277,7 @@ func (s *Store) Segments(ctx context.Context, cameraID string) ([]PersonSegment,
 	segments := make([]PersonSegment, 0)
 	for rows.Next() {
 		var segment PersonSegment
-		if err := rows.Scan(&segment.ID, &segment.CameraID, &segment.RecordingName, &segment.StartSecond, &segment.EndSecond, &segment.PeakSecond, &segment.MaxConfidence, &segment.Source); err != nil {
+		if err := rows.Scan(&segment.ID, &segment.CameraID, &segment.RecordingName, &segment.StartSecond, &segment.EndSecond, &segment.PeakSecond, &segment.MaxConfidence, &segment.BestScore, &segment.Source); err != nil {
 			return nil, err
 		}
 		segments = append(segments, segment)
@@ -240,6 +289,14 @@ func (s *Store) ResetAnalyses(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE recording_analysis SET status='pending', progress_seconds=0, error=''`)
 	if err != nil {
 		return fmt.Errorf("reset recording analyses: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ResetCameraAnalyses(ctx context.Context, cameraID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE recording_analysis SET status='pending', progress_seconds=0, error='' WHERE camera_id=?`, cameraID)
+	if err != nil {
+		return fmt.Errorf("reset camera analyses: %w", err)
 	}
 	return nil
 }

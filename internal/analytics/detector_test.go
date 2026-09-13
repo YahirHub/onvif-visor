@@ -23,3 +23,15 @@ func TestDecodePersonBoxesUsesPersonClass(t *testing.T) {
 		t.Fatalf("boxes=%#v", boxes)
 	}
 }
+
+func TestDecodeDetectionsReadsNonPersonClass(t *testing.T) {
+	pred := make([]float32, nanoPoints*nanoChannels)
+	pred[2] = .82 // car
+	for side := 0; side < 4; side++ {
+		pred[nanoClasses+side*(nanoRegMax+1)+2] = 10
+	}
+	detections := decodeDetections(pred, .35)
+	if len(detections) != 1 || detections[0].ClassID != 2 || detections[0].ClassName != "car" || detections[0].Score != .82 {
+		t.Fatalf("detections=%#v", detections)
+	}
+}

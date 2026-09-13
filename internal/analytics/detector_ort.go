@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -130,25 +131,20 @@ func (d *nanoDetORT) Close() error {
 	return first
 }
 
-func (d *nanoDetORT) DetectPerson(frameBGR []byte) (float32, bool, error) {
+func (d *nanoDetORT) Detect(frameBGR []byte) ([]Detection, error) {
 	if len(frameBGR) != InputWidth*InputHeight*3 {
-		return 0, false, fmt.Errorf("invalid NanoDet frame size: %d", len(frameBGR))
+		return nil, fmt.Errorf("invalid NanoDet frame size: %d", len(frameBGR))
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.session == nil {
-		return 0, false, ErrInferenceUnavailable
+		return nil, ErrInferenceUnavailable
 	}
 	prepareNanoDetInput(d.input.GetData(), frameBGR)
 	if err := d.session.Run(); err != nil {
-		return 0, false, err
+		return nil, err
 	}
-	boxes := decodePersonBoxes(d.output.GetData(), PersonThreshold)
-	boxes = nms(boxes, NMSThreshold)
-	if len(boxes) == 0 {
-		return 0, false, nil
-	}
-	return boxes[0].Score, true, nil
+	return decodeDetections(d.output.GetData(), DetectionThreshold), nil
 }
 
 func prepareNanoDetInput(dst []float32, bgr []byte) {
@@ -161,38 +157,6 @@ func prepareNanoDetInput(dst []float32, bgr []byte) {
 			dst[c*plane+i] = (float32(bgr[base+c]) - means[c]) * invStd[c]
 		}
 	}
-}
-
-func decodePersonBoxes(pred []float32, threshold float32) []Box {
-	if len(pred) < nanoPoints*nanoChannels {
-		return nil
-	}
-	boxes := make([]Box, 0, 16)
-	index := 0
-	for _, stride := range nanoStrides {
-		featW := int(math.Ceil(float64(InputWidth) / float64(stride)))
-		featH := int(math.Ceil(float64(InputHeight) / float64(stride)))
-		for y := 0; y < featH; y++ {
-			for x := 0; x < featW; x++ {
-				row := pred[index*nanoChannels : (index+1)*nanoChannels]
-				score := row[0]
-				if score >= threshold {
-					dis := [4]float32{}
-					for side := 0; side < 4; side++ {
-						start := nanoClasses + side*(nanoRegMax+1)
-						dis[side] = softmaxExpectation(row[start:start+nanoRegMax+1]) * float32(stride)
-					}
-					cx, cy := float32(x*stride), float32(y*stride)
-					boxes = append(boxes, Box{
-						X1: max32(0, cx-dis[0]), Y1: max32(0, cy-dis[1]),
-						X2: min32(InputWidth, cx+dis[2]), Y2: min32(InputHeight, cy+dis[3]), Score: score,
-					})
-				}
-				index++
-			}
-		}
-	}
-	return boxes
 }
 
 func softmaxExpectation(values []float32) float32 {
@@ -215,4 +179,60 @@ func softmaxExpectation(values []float32) float32 {
 		return 0
 	}
 	return float32(weighted / denominator)
+}
+
+func decodeDetections(pred []float32, threshold float32) []Detection {
+	if len(pred) < nanoPoints*nanoChannels {
+		return nil
+	}
+	byClass := make(map[int][]Box)
+	index := 0
+	for _, stride := range nanoStrides {
+		featW := int(math.Ceil(float64(InputWidth) / float64(stride)))
+		featH := int(math.Ceil(float64(InputHeight) / float64(stride)))
+		for y := 0; y < featH; y++ {
+			for x := 0; x < featW; x++ {
+				row := pred[index*nanoChannels : (index+1)*nanoChannels]
+				classID, score := 0, row[0]
+				for candidate := 1; candidate < nanoClasses; candidate++ {
+					if row[candidate] > score {
+						classID, score = candidate, row[candidate]
+					}
+				}
+				if score >= threshold {
+					dis := [4]float32{}
+					for side := 0; side < 4; side++ {
+						start := nanoClasses + side*(nanoRegMax+1)
+						dis[side] = softmaxExpectation(row[start:start+nanoRegMax+1]) * float32(stride)
+					}
+					cx, cy := float32(x*stride), float32(y*stride)
+					byClass[classID] = append(byClass[classID], Box{
+						X1: max32(0, cx-dis[0]), Y1: max32(0, cy-dis[1]),
+						X2: min32(InputWidth, cx+dis[2]), Y2: min32(InputHeight, cy+dis[3]), Score: score,
+					})
+				}
+				index++
+			}
+		}
+	}
+
+	out := make([]Detection, 0, 16)
+	for classID, boxes := range byClass {
+		for _, box := range nms(boxes, NMSThreshold) {
+			out = append(out, Detection{ClassID: classID, ClassName: ClassName(classID), Score: box.Score, Box: box})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+func decodePersonBoxes(pred []float32, threshold float32) []Box {
+	detections := decodeDetections(pred, threshold)
+	boxes := make([]Box, 0, len(detections))
+	for _, detection := range detections {
+		if detection.ClassID == 0 {
+			boxes = append(boxes, detection.Box)
+		}
+	}
+	return boxes
 }

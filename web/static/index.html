@@ -177,6 +177,15 @@
                   </div>
                 </div>
 
+                <section id="analyticsDailySummary" class="analytics-daily-summary" aria-live="polite">
+                  <div class="analytics-summary-head">
+                    <div><p class="eyebrow">RESUMEN DEL DÍA</p><strong id="analyticsSummaryTitle">Actividad inteligente</strong></div>
+                    <span id="analyticsSummaryStatus" class="analytics-status">Cargando…</span>
+                  </div>
+                  <div id="analyticsSummaryGrid" class="analytics-summary-grid"></div>
+                  <div id="analyticsSummaryClasses" class="analytics-summary-classes"></div>
+                </section>
+
                 <section id="recordingPlayer" class="recording-player" hidden>
                   <div class="recording-player-head">
                     <div><strong id="recordingPlayerTitle">Reproducción</strong><span id="recordingPlayerDate"></span></div>
@@ -201,7 +210,7 @@
 
                 <section class="timeline-panel">
                   <div class="timeline-head">
-                    <div><h3>Línea de tiempo</h3><p>Grabaciones y momentos donde NanoDet detectó personas.</p></div>
+                    <div><h3>Línea de tiempo inteligente</h3><p>Grabaciones y objetos detectados por NanoDet, separados por clase.</p></div>
                     <div class="timeline-head-actions">
                       <span id="analyticsStatus" class="analytics-status">Analítica…</span>
                       <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
@@ -214,12 +223,14 @@
                     </div>
                   </div>
                   <div class="timeline-scroll-shell">
-                    <div class="timeline-label-column" aria-hidden="true"><span>Hora</span><span>Grabación</span><span>Personas</span></div>
+                    <div id="timelineLabelColumn" class="timeline-label-column" aria-hidden="true">
+                      <span>Hora</span><span>Grabación</span><div id="analyticsTrackLabels" class="analytics-track-labels"></div>
+                    </div>
                     <div id="timelineViewport" class="timeline-viewport" tabindex="0" aria-label="Línea de tiempo. Usa pellizco, Control más rueda o los botones de zoom para acercar y arrastra horizontalmente para desplazarte.">
                       <div id="timelineCanvas" class="timeline-canvas">
                         <div id="timelineRuler" class="timeline-ruler" aria-hidden="true"></div>
                         <div id="recordingTimeline" class="recording-timeline"></div>
-                        <div id="personTimeline" class="person-timeline" aria-label="Detecciones de personas"></div>
+                        <div id="analyticsTracks" class="analytics-timeline-tracks"></div>
                       </div>
                     </div>
                   </div>
@@ -446,6 +457,66 @@
     </form>
   </dialog>
 
+  <dialog id="analyticsDialog" class="wide-dialog analytics-dialog">
+    <form id="analyticsConfigForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">VISIÓN LOCAL</p><h2 id="analyticsDialogTitle">Analítica inteligente</h2><p id="analyticsDialogSubtitle" class="hint">Clases, zonas, líneas y reglas por cámara.</p></div><button type="button" class="icon-button" data-close="analyticsDialog" aria-label="Cerrar">×</button></div>
+      <div id="analyticsConfigLoading" class="analytics-config-loading"><span class="spinner"></span><span>Cargando configuración…</span></div>
+      <div id="analyticsConfigError" class="form-error" role="alert"></div>
+      <div id="analyticsConfigContent" class="analytics-config-layout" hidden>
+        <section class="analytics-map-panel">
+          <div class="analytics-preview-wrap" id="analyticsPreviewWrap">
+            <img id="analyticsPreviewImage" alt="Vista de cámara para configurar zonas y líneas">
+            <svg id="analyticsOverlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="Zonas y líneas configuradas"></svg>
+          </div>
+          <div class="analytics-draw-toolbar">
+            <button id="analyticsDrawZoneBtn" class="button secondary" type="button">+ Zona</button>
+            <button id="analyticsDrawLineBtn" class="button secondary" type="button">+ Línea</button>
+            <button id="analyticsFinishDrawBtn" class="button primary" type="button" hidden>Terminar</button>
+            <button id="analyticsCancelDrawBtn" class="button ghost" type="button" hidden>Cancelar dibujo</button>
+          </div>
+          <p id="analyticsDrawHint" class="hint">Dibuja zonas o líneas sobre la imagen. Las coordenadas se guardan normalizadas, por lo que siguen funcionando aunque cambie el tamaño de pantalla.</p>
+          <div class="analytics-geometry-columns">
+            <div><div class="mini-section-head"><strong>Zonas</strong><span id="analyticsZoneCount">0</span></div><div id="analyticsZoneList" class="analytics-geometry-list"></div></div>
+            <div><div class="mini-section-head"><strong>Líneas</strong><span id="analyticsLineCount">0</span></div><div id="analyticsLineList" class="analytics-geometry-list"></div></div>
+          </div>
+        </section>
+        <section class="analytics-config-panel">
+          <div class="analytics-config-section">
+            <div class="mini-section-head"><div><strong>Objetos a detectar</strong><small>Misma inferencia NanoDet, sin otro modelo.</small></div><span id="analyticsClassCount">0</span></div>
+            <input id="analyticsClassSearch" type="search" placeholder="Buscar persona, automóvil, perro…" autocomplete="off">
+            <div id="analyticsClassList" class="analytics-class-list"></div>
+          </div>
+          <div class="analytics-config-section">
+            <div class="mini-section-head"><div><strong>Reglas de alerta</strong><small>Combina objeto + evento + horario.</small></div><span id="analyticsRuleCount">0</span></div>
+            <div id="analyticsRuleList" class="analytics-rule-list"></div>
+            <div class="analytics-rule-editor">
+              <label class="field">Nombre<input id="analyticsRuleName" maxlength="80" placeholder="Persona en cochera de noche"></label>
+              <div class="form-row">
+                <label class="field">Objeto<select id="analyticsRuleClass"></select></label>
+                <label class="field">Evento<select id="analyticsRuleType"><option value="object">Objeto detectado</option><option value="zone_enter">Entra a zona</option><option value="zone_exit">Sale de zona</option><option value="line_cross">Cruza línea</option></select></label>
+              </div>
+              <div class="form-row">
+                <label id="analyticsRuleZoneField" class="field" hidden>Zona<select id="analyticsRuleZone"></select></label>
+                <label id="analyticsRuleLineField" class="field" hidden>Línea<select id="analyticsRuleLine"></select></label>
+                <label class="field">Cooldown (s)<input id="analyticsRuleCooldown" type="number" min="1" max="3600" value="30"></label>
+              </div>
+              <div class="form-row">
+                <label class="field">Desde<input id="analyticsRuleStart" type="time"></label>
+                <label class="field">Hasta<input id="analyticsRuleEnd" type="time"></label>
+              </div>
+              <div class="weekday-grid analytics-rule-days" id="analyticsRuleDays">
+                <label><input type="checkbox" value="1"><span>Lun</span></label><label><input type="checkbox" value="2"><span>Mar</span></label><label><input type="checkbox" value="3"><span>Mié</span></label><label><input type="checkbox" value="4"><span>Jue</span></label><label><input type="checkbox" value="5"><span>Vie</span></label><label><input type="checkbox" value="6"><span>Sáb</span></label><label><input type="checkbox" value="0"><span>Dom</span></label>
+              </div>
+              <label class="settings-check"><input id="analyticsRuleTelegram" type="checkbox"><span>Enviar esta regla a Telegram</span></label>
+              <div class="analytics-rule-actions"><button id="analyticsRuleResetBtn" class="button ghost" type="button">Limpiar</button><button id="analyticsRuleAddBtn" class="button secondary" type="button">Agregar regla</button></div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="dialog-actions"><span id="analyticsConfigMessage" class="form-message" role="status" aria-live="polite"></span><button type="button" class="button secondary" data-close="analyticsDialog">Cancelar</button><button id="analyticsSaveBtn" class="button primary" type="submit">Guardar analítica</button></div>
+    </form>
+  </dialog>
+
   <dialog id="discoveryDialog" class="wide-dialog">
     <div class="dialog-head"><div><p class="eyebrow">WS-DISCOVERY</p><h2>Dispositivos encontrados</h2></div><button type="button" class="icon-button" data-close="discoveryDialog" aria-label="Cerrar">×</button></div>
     <p id="discoveryStatus" class="hint">Buscando cámaras ONVIF en la red local…</p>
@@ -471,6 +542,7 @@
       </button>
       <div class="camera-hover-actions">
         <label class="compact-toggle" title="Grabar cuando haya movimiento"><input class="record-toggle" type="checkbox"><span>REC</span></label>
+        <button class="camera-analytics icon-button" type="button" aria-label="Configurar analítica inteligente" title="Analítica inteligente">AI</button>
         <button class="camera-schedule icon-button" type="button" aria-label="Programar grabación" title="Programar grabación">◷</button>
         <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar">×</button>
       </div>

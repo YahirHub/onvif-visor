@@ -64,6 +64,7 @@ type analysisJob struct {
 	SizeBytes     int64
 	ModifiedNS    int64
 	Duration      float64
+	StartedAt     time.Time
 }
 
 type Manager struct {
@@ -83,6 +84,9 @@ type Manager struct {
 	live         map[string]context.CancelFunc
 	queued       map[string]bool
 	personFrames map[string]PersonFrame
+	configs      map[string]CameraAnalyticsConfig
+	trackers     map[string]*Tracker
+	eventHandler func(SmartEvent)
 	status       Status
 	jobs         chan analysisJob
 	wg           sync.WaitGroup
@@ -114,7 +118,8 @@ func New(cfg Config) (*Manager, error) {
 		ctx: ctx, cancel: cancel, ffmpeg: cfg.FFmpeg, ffprobe: ffprobe, model: cfg.ModelPath,
 		runtime: ResolveRuntimePath(cfg.RuntimePath), media: cfg.Media, store: store,
 		sources: make(map[string]CameraSource), live: make(map[string]context.CancelFunc),
-		queued: make(map[string]bool), personFrames: make(map[string]PersonFrame), jobs: make(chan analysisJob, 128),
+		queued: make(map[string]bool), personFrames: make(map[string]PersonFrame),
+		configs: make(map[string]CameraAnalyticsConfig), trackers: make(map[string]*Tracker), jobs: make(chan analysisJob, 128),
 		status: Status{Enabled: true, Model: ModelName, SampleFPS: 1},
 	}
 	detector, detectorErr := NewDetector(m.runtime, cfg.ModelPath)
@@ -158,6 +163,81 @@ func (m *Manager) Status() Status {
 
 func (m *Manager) Segments(ctx context.Context, cameraID string) ([]PersonSegment, error) {
 	return m.store.Segments(ctx, cameraID)
+}
+
+func (m *Manager) ObjectSegments(ctx context.Context, cameraID string) ([]ObjectSegment, error) {
+	return m.store.ObjectSegments(ctx, cameraID)
+}
+
+func (m *Manager) SmartEvents(ctx context.Context, cameraID string, from, to time.Time) ([]SmartEvent, error) {
+	return m.store.SmartEvents(ctx, cameraID, from, to)
+}
+
+func (m *Manager) CameraConfig(ctx context.Context, cameraID string) (CameraAnalyticsConfig, error) {
+	cfg, err := m.store.CameraConfig(ctx, cameraID)
+	if err != nil {
+		return CameraAnalyticsConfig{}, err
+	}
+	m.mu.Lock()
+	m.configs[cameraID] = cfg
+	if m.trackers[cameraID] == nil {
+		m.trackers[cameraID] = NewTracker()
+	}
+	m.mu.Unlock()
+	return cfg, nil
+}
+
+func (m *Manager) SaveCameraConfig(ctx context.Context, cameraID string, cfg CameraAnalyticsConfig) (CameraAnalyticsConfig, error) {
+	clean, err := m.store.SaveCameraConfig(ctx, cameraID, cfg)
+	if err != nil {
+		return CameraAnalyticsConfig{}, err
+	}
+	m.mu.Lock()
+	m.configs[cameraID] = clean
+	m.trackers[cameraID] = NewTracker()
+	m.mu.Unlock()
+	return clean, nil
+}
+
+func (m *Manager) SetEventHandler(handler func(SmartEvent)) {
+	m.mu.Lock()
+	m.eventHandler = handler
+	m.mu.Unlock()
+}
+
+func (m *Manager) configAndTracker(cameraID string) (CameraAnalyticsConfig, *Tracker) {
+	m.mu.Lock()
+	cfg, ok := m.configs[cameraID]
+	tracker := m.trackers[cameraID]
+	m.mu.Unlock()
+	if !ok {
+		loaded, err := m.store.CameraConfig(m.ctx, cameraID)
+		if err == nil {
+			cfg = loaded
+		} else {
+			cfg = DefaultCameraAnalyticsConfig()
+			m.setLastError(err)
+		}
+	}
+	m.mu.Lock()
+	if _, exists := m.configs[cameraID]; !exists {
+		m.configs[cameraID] = cfg
+	}
+	if tracker == nil {
+		tracker = NewTracker()
+		m.trackers[cameraID] = tracker
+	}
+	m.mu.Unlock()
+	return cfg, tracker
+}
+
+func (m *Manager) emitSmartEvent(event SmartEvent) {
+	m.mu.Lock()
+	handler := m.eventHandler
+	m.mu.Unlock()
+	if handler != nil {
+		handler(event)
+	}
 }
 
 func (m *Manager) Analyses(ctx context.Context, cameraID string) ([]RecordingAnalysis, error) {
@@ -224,7 +304,10 @@ func (m *Manager) RemoveCamera(cameraID string) {
 	}
 	delete(m.live, cameraID)
 	delete(m.personFrames, cameraID)
+	delete(m.configs, cameraID)
+	delete(m.trackers, cameraID)
 	m.mu.Unlock()
+	_ = m.store.DeleteCameraConfig(context.Background(), cameraID)
 }
 
 func (m *Manager) ScanNow() {
@@ -236,6 +319,16 @@ func (m *Manager) Reindex() {
 	// en tandas sin perder trabajos cuando el canal está momentáneamente lleno.
 	go func() {
 		if err := m.store.ResetAnalyses(m.ctx); err != nil {
+			m.setLastError(err)
+			return
+		}
+		m.scanOnce(false)
+	}()
+}
+
+func (m *Manager) ReindexCamera(cameraID string) {
+	go func() {
+		if err := m.store.ResetCameraAnalyses(m.ctx, cameraID); err != nil {
 			m.setLastError(err)
 			return
 		}
@@ -288,7 +381,7 @@ func (m *Manager) scanOnce(force bool) {
 				continue
 			}
 			if !force {
-				needs, err := m.store.NeedsAnalysis(m.ctx, source.ID, file.Name, info.Size(), info.ModTime().UnixNano(), ModelName)
+				needs, err := m.store.NeedsAnalysis(m.ctx, source.ID, file.Name, info.Size(), info.ModTime().UnixNano(), AnalysisModelKey)
 				if err != nil {
 					m.setLastError(err)
 					continue
@@ -297,7 +390,7 @@ func (m *Manager) scanOnce(force bool) {
 					continue
 				}
 			}
-			job := analysisJob{CameraID: source.ID, RecordingName: file.Name, Path: path, SizeBytes: info.Size(), ModifiedNS: info.ModTime().UnixNano(), Duration: file.DurationSecond}
+			job := analysisJob{CameraID: source.ID, RecordingName: file.Name, Path: path, SizeBytes: info.Size(), ModifiedNS: info.ModTime().UnixNano(), Duration: file.DurationSecond, StartedAt: file.StartedAt}
 			m.enqueue(job)
 		}
 	}
@@ -342,13 +435,26 @@ func (m *Manager) worker() {
 }
 
 func (m *Manager) analyze(job analysisJob) {
-	if err := m.store.MarkAnalyzing(m.ctx, job.CameraID, job.RecordingName, job.SizeBytes, job.ModifiedNS, job.Duration, ModelName); err != nil {
+	if err := m.store.MarkAnalyzing(m.ctx, job.CameraID, job.RecordingName, job.SizeBytes, job.ModifiedNS, job.Duration, AnalysisModelKey); err != nil {
 		m.setLastError(err)
 		return
 	}
 	m.setAnalyzing(job, 0)
-	points := make([]DetectionPoint, 0)
-	filter := fmt.Sprintf("fps=1,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=bgr24", InputWidth, InputHeight, InputWidth, InputHeight)
+	cfg, _ := m.configAndTracker(job.CameraID)
+	enabled := enabledClassSet(cfg)
+	tracker := NewTracker()
+	points := make([]ObjectDetectionPoint, 0)
+	events := make([]SmartEvent, 0)
+	recordingStartedAt := job.StartedAt
+	if recordingStartedAt.IsZero() {
+		if job.ModifiedNS > 0 {
+			recordingStartedAt = time.Unix(0, job.ModifiedNS).Add(-time.Duration(maxFloat(job.Duration, 1) * float64(time.Second)))
+		} else {
+			recordingStartedAt = time.Now().UTC().Add(-time.Duration(maxFloat(job.Duration, 1) * float64(time.Second)))
+		}
+	}
+	width, height := m.recordingFrameDimensions(m.ctx, job.Path)
+	filter := fmt.Sprintf("fps=1,scale=%d:%d,format=bgr24", width, height)
 	cmd := exec.CommandContext(m.ctx, m.ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", "1", "-i", job.Path, "-an", "-vf", filter, "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -361,7 +467,7 @@ func (m *Manager) analyze(job analysisJob) {
 		m.failJob(job, err)
 		return
 	}
-	frame := make([]byte, frameSize)
+	frame := make([]byte, width*height*3)
 	frameIndex := 0
 	for {
 		_, readErr := io.ReadFull(stdout, frame)
@@ -377,17 +483,19 @@ func (m *Manager) analyze(job analysisJob) {
 			m.failJob(job, readErr)
 			return
 		}
-		confidence, found, detectErr := m.detect(frame)
+		modelFrame := letterboxBGR(frame, width, height, InputWidth, InputHeight)
+		detections, detectErr := m.detect(modelFrame)
 		if detectErr != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 			m.failJob(job, detectErr)
 			return
 		}
+		detections = scoreDetections(modelFrame, detections, enabled)
 		second := float64(frameIndex)
-		if found {
-			points = append(points, DetectionPoint{Second: second, Confidence: float64(confidence)})
-		}
+		points = append(points, pointsForFrame(second, detections, enabled)...)
+		occurredAt := recordingStartedAt.Add(time.Duration(second * float64(time.Second)))
+		events = append(events, tracker.Process(job.CameraID, job.RecordingName, second, occurredAt, detections, width, height, cfg)...)
 		frameIndex++
 		if frameIndex%progressEveryFrame == 0 {
 			_ = m.store.UpdateProgress(m.ctx, job.CameraID, job.RecordingName, second)
@@ -398,7 +506,6 @@ func (m *Manager) analyze(job analysisJob) {
 			_ = cmd.Wait()
 			return
 		}
-		// Cede CPU a live/recording en este servidor pequeño.
 		time.Sleep(10 * time.Millisecond)
 	}
 	if _, err := os.Stat(job.Path); errors.Is(err, os.ErrNotExist) {
@@ -406,21 +513,21 @@ func (m *Manager) analyze(job analysisJob) {
 		m.clearAnalyzing()
 		return
 	}
-	segments := MergeDetectionPoints(points, 3)
-	analysis := RecordingAnalysis{CameraID: job.CameraID, RecordingName: job.RecordingName, SizeBytes: job.SizeBytes, ModifiedUnixNS: job.ModifiedNS, DurationSecond: maxFloat(job.Duration, float64(frameIndex)), Status: "complete", ProgressSecond: float64(frameIndex), Model: ModelName, AnalyzedAt: time.Now().UTC()}
-	if err := m.store.Complete(m.ctx, analysis, segments); err != nil {
+	segments := MergeObjectDetectionPoints(points, 3)
+	analysis := RecordingAnalysis{CameraID: job.CameraID, RecordingName: job.RecordingName, SizeBytes: job.SizeBytes, ModifiedUnixNS: job.ModifiedNS, DurationSecond: maxFloat(job.Duration, float64(frameIndex)), Status: "complete", ProgressSecond: float64(frameIndex), Model: AnalysisModelKey, AnalyzedAt: time.Now().UTC()}
+	if err := m.store.CompleteObjects(m.ctx, analysis, segments, events); err != nil {
 		m.setLastError(err)
 	}
 	m.clearAnalyzing()
 }
 
-func (m *Manager) detect(frame []byte) (float32, bool, error) {
+func (m *Manager) detect(frame []byte) ([]Detection, error) {
 	m.inferMu.Lock()
 	defer m.inferMu.Unlock()
 	if m.detector == nil {
-		return 0, false, ErrInferenceUnavailable
+		return nil, ErrInferenceUnavailable
 	}
-	return m.detector.DetectPerson(frame)
+	return m.detector.Detect(frame)
 }
 
 func (m *Manager) rememberPersonFrame(cameraID string, confidence float32) {
@@ -471,26 +578,67 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 			return fmt.Errorf("frame stream ended: %v: %s", waitErr, strings.TrimSpace(stderr.String()))
 		}
 		modelFrame := letterboxBGR(frame, width, height, InputWidth, InputHeight)
-		confidence, found, err := m.detect(modelFrame)
+		detections, err := m.detect(modelFrame)
 		if err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 			return err
 		}
-		if !found {
-			continue
+		cfg, tracker := m.configAndTracker(cameraID)
+		enabled := enabledClassSet(cfg)
+		detections = scoreDetections(modelFrame, detections, enabled)
+		if confidence, _, found := summarizeClassDetections(modelFrame, detections, 0); found {
+			m.rememberPersonFrame(cameraID, float32(confidence))
 		}
-		m.rememberPersonFrame(cameraID, confidence)
+
 		status := m.media.Status(cameraID)
-		if !status.Active || status.Path == "" || status.StartedAt.IsZero() {
-			continue
+		recordingName := ""
+		offset := 0.0
+		if status.Active && status.Path != "" && !status.StartedAt.IsZero() {
+			recordingName = filepath.Base(status.Path)
+			offset = time.Since(status.StartedAt).Seconds()
+			if offset < 0 {
+				offset = 0
+			}
+			for _, point := range pointsForFrame(offset, detections, enabled) {
+				_ = m.store.UpsertLiveObjectDetection(ctx, cameraID, recordingName, point.ClassID, point.ClassName, offset, point.Confidence, point.BestScore)
+			}
 		}
-		offset := time.Since(status.StartedAt).Seconds()
-		if offset < 0 {
-			offset = 0
+		now := time.Now().UTC()
+		events := tracker.Process(cameraID, recordingName, offset, now, detections, width, height, cfg)
+		if len(events) > 0 {
+			if err := m.store.InsertSmartEvents(ctx, events); err != nil {
+				m.setLastError(err)
+			}
+			for _, event := range events {
+				m.emitSmartEvent(event)
+			}
 		}
-		_ = m.store.UpsertLiveDetection(ctx, cameraID, filepath.Base(status.Path), offset, float64(confidence))
 	}
+}
+
+func (m *Manager) recordingFrameDimensions(ctx context.Context, path string) (int, int) {
+	if m.ffprobe == "" {
+		return InputWidth, 180
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, m.ffprobe,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height",
+		"-of", "csv=s=x:p=0",
+		path,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return InputWidth, 180
+	}
+	var sourceWidth, sourceHeight int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%dx%d", &sourceWidth, &sourceHeight); err != nil {
+		return InputWidth, 180
+	}
+	return fitWithin(sourceWidth, sourceHeight, InputWidth, InputHeight)
 }
 
 func (m *Manager) liveFrameDimensions(ctx context.Context, streamURI string) (int, int) {
@@ -571,7 +719,7 @@ func (m *Manager) failJob(job analysisJob, err error) {
 		m.clearAnalyzing()
 		return
 	}
-	_ = m.store.Fail(context.Background(), job.CameraID, job.RecordingName, ModelName, compactError(err))
+	_ = m.store.Fail(context.Background(), job.CameraID, job.RecordingName, AnalysisModelKey, compactError(err))
 	m.setLastError(err)
 	m.clearAnalyzing()
 }
