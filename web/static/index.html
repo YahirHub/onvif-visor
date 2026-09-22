@@ -706,8 +706,17 @@
         <span class="open-overlay"><strong class="camera-card-name"></strong><small class="camera-card-meta"></small></span>
       </button>
       <div class="camera-hover-actions">
-        <button class="camera-settings icon-button" type="button" aria-label="Configurar cámara" title="Configurar cámara">⚙</button>
-        <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar">×</button>
+        <button class="camera-settings icon-button" type="button" aria-label="Configurar cámara" title="Configurar cámara">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h10"></path><path d="M18 7h2"></path><circle cx="16" cy="7" r="2"></circle>
+            <path d="M4 17h2"></path><path d="M10 17h10"></path><circle cx="8" cy="17" r="2"></circle>
+          </svg>
+        </button>
+        <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 7l10 10"></path><path d="M17 7L7 17"></path>
+          </svg>
+        </button>
       </div>
     </article>
   </template>

@@ -1254,3 +1254,33 @@ dialog.analytics-dialog { width: min(96vw, 1180px); max-height: 92vh; }
   .camera-settings-savebar { align-items: stretch; flex-direction: column; }
   .camera-settings-savebar .button { width: 100%; }
 }
+
+.camera-hover-actions {
+  z-index: 4;
+  pointer-events: auto;
+}
+.camera-hover-actions .icon-button {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+  text-align: center;
+}
+.camera-hover-actions .icon-button svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.camera-hover-actions .camera-delete svg {
+  width: 14px;
+  height: 14px;
+}

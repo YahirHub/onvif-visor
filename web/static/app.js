@@ -610,6 +610,14 @@ function cameraScheduleMode(camera) {
   return 'schedule';
 }
 
+function openCameraSettings(cameraID) {
+  if (!state.cameras.some(camera => camera.id === cameraID)) return;
+  state.cameraSettingsID = cameraID;
+  navigate('cameraSettings', {
+    path: '/camaras/' + encodeURIComponent(cameraID) + '/configuracion',
+  });
+}
+
 function cameraMatches(camera, query) {
   if (!query) return true;
   const haystack = [camera.name, camera.manufacturer, camera.model, camera.endpoint, camera.profile_name]
@@ -666,11 +674,15 @@ function renderCameras() {
 
     mediaButton.addEventListener('click', () => openMonitor(camera.id));
 
-    settingsButton.addEventListener('click', () => navigate('cameraSettings', {
-      path: '/camaras/' + encodeURIComponent(camera.id) + '/configuracion',
-    }));
+    settingsButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openCameraSettings(camera.id);
+    });
 
-    deleteButton.addEventListener('click', async () => {
+    deleteButton.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const accepted = await confirmAction({
         title: `Eliminar ${camera.name}`,
         message: 'La cámara dejará de aparecer en el visor y se detendrán sus transmisiones activas. Las grabaciones permanecen en disco, pero dejarán de mostrarse en la biblioteca mientras la cámara no esté configurada.',
