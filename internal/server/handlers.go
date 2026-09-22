@@ -317,28 +317,174 @@ func (a *App) handleRecordingStorage(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-func (a *App) handleRecordings(w http.ResponseWriter, r *http.Request) {
-	cameraID := strings.TrimSpace(r.URL.Query().Get("camera_id"))
-	cameras := a.store.List()
-	out := make([]media.RecordingFile, 0)
-	found := cameraID == ""
-	for _, cam := range cameras {
-		if cameraID != "" && cam.ID != cameraID {
-			continue
+const (
+	defaultRecordingPageSize = 24
+	maxRecordingPageSize     = 100
+	maxRecordingTimelineSpan = 48 * time.Hour
+)
+
+type recordingCameraSummary struct {
+	CameraID       string     `json:"camera_id"`
+	Count          int        `json:"count"`
+	SizeBytes      int64      `json:"size_bytes"`
+	DurationSecond float64    `json:"duration_seconds"`
+	LatestStarted  *time.Time `json:"latest_started_at,omitempty"`
+}
+
+type recordingLibrarySummary struct {
+	Cameras    []recordingCameraSummary `json:"cameras"`
+	TotalBytes int64                    `json:"total_bytes"`
+	FileCount  int                      `json:"file_count"`
+}
+
+type recordingPageResponse struct {
+	Items      []media.RecordingFile `json:"items"`
+	Timeline   []media.RecordingFile `json:"timeline"`
+	Page       int                   `json:"page"`
+	PageSize   int                   `json:"page_size"`
+	Total      int                   `json:"total"`
+	TotalPages int                   `json:"total_pages"`
+}
+
+func summarizeRecordings(cameraID string, files []media.RecordingFile) recordingCameraSummary {
+	summary := recordingCameraSummary{CameraID: cameraID}
+	for i := range files {
+		file := files[i]
+		summary.Count++
+		summary.SizeBytes += file.SizeBytes
+		summary.DurationSecond += file.DurationSecond
+		if summary.LatestStarted == nil || file.StartedAt.After(*summary.LatestStarted) {
+			started := file.StartedAt
+			summary.LatestStarted = &started
 		}
-		found = true
-		files, err := a.media.ListRecordings(cam.ID)
+	}
+	return summary
+}
+
+func recordingsInRange(files []media.RecordingFile, from, to time.Time) []media.RecordingFile {
+	if from.IsZero() || to.IsZero() {
+		return append([]media.RecordingFile(nil), files...)
+	}
+	filtered := make([]media.RecordingFile, 0, len(files))
+	for _, file := range files {
+		duration := time.Duration(max(file.DurationSecond, 1) * float64(time.Second))
+		end := file.StartedAt.Add(duration)
+		if end.After(from) && file.StartedAt.Before(to) {
+			filtered = append(filtered, file)
+		}
+	}
+	return filtered
+}
+
+func parseRecordingPageQuery(r *http.Request) (page, pageSize int, from, to time.Time, err error) {
+	page = 1
+	pageSize = defaultRecordingPageSize
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		page, err = strconv.Atoi(raw)
+		if err != nil || page < 1 {
+			return 0, 0, time.Time{}, time.Time{}, errors.New("página inválida")
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("page_size")); raw != "" {
+		pageSize, err = strconv.Atoi(raw)
+		if err != nil || pageSize < 1 || pageSize > maxRecordingPageSize {
+			return 0, 0, time.Time{}, time.Time{}, errors.New("tamaño de página inválido")
+		}
+	}
+
+	fromRaw := strings.TrimSpace(r.URL.Query().Get("from"))
+	toRaw := strings.TrimSpace(r.URL.Query().Get("to"))
+	if fromRaw == "" && toRaw == "" {
+		return page, pageSize, time.Time{}, time.Time{}, nil
+	}
+	if fromRaw == "" || toRaw == "" {
+		return 0, 0, time.Time{}, time.Time{}, errors.New("rango de fechas incompleto")
+	}
+	from, err = time.Parse(time.RFC3339, fromRaw)
+	if err != nil {
+		return 0, 0, time.Time{}, time.Time{}, errors.New("fecha inicial inválida")
+	}
+	to, err = time.Parse(time.RFC3339, toRaw)
+	if err != nil || !to.After(from) {
+		return 0, 0, time.Time{}, time.Time{}, errors.New("fecha final inválida")
+	}
+	if to.Sub(from) > maxRecordingTimelineSpan {
+		return 0, 0, time.Time{}, time.Time{}, errors.New("el rango para la línea de tiempo no puede superar 48 horas")
+	}
+	return page, pageSize, from, to, nil
+}
+
+func paginateRecordings(files []media.RecordingFile, page, pageSize int) ([]media.RecordingFile, int, int) {
+	total := len(files)
+	if total == 0 {
+		return []media.RecordingFile{}, 1, 0
+	}
+	totalPages := (total + pageSize - 1) / pageSize
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * pageSize
+	end := min(start+pageSize, total)
+	return append([]media.RecordingFile(nil), files[start:end]...), page, totalPages
+}
+
+func (a *App) handleRecordingSummary(w http.ResponseWriter, _ *http.Request) {
+	storage, err := a.media.RecordingStorageStats()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo calcular el almacenamiento de grabaciones")
+		return
+	}
+	cameras := a.store.List()
+	out := recordingLibrarySummary{
+		Cameras:    make([]recordingCameraSummary, 0, len(cameras)),
+		TotalBytes: storage.TotalBytes,
+		FileCount:  storage.FileCount,
+	}
+	for _, camera := range cameras {
+		files, err := a.media.ListRecordings(camera.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "no se pudo consultar el almacenamiento de grabaciones")
 			return
 		}
-		out = append(out, files...)
+		out.Cameras = append(out.Cameras, summarizeRecordings(camera.ID, files))
 	}
-	if !found {
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) handleRecordings(w http.ResponseWriter, r *http.Request) {
+	cameraID := strings.TrimSpace(r.URL.Query().Get("camera_id"))
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "selecciona una cámara")
+		return
+	}
+	if _, err := a.store.Get(cameraID); err != nil {
 		writeError(w, http.StatusNotFound, "cámara no encontrada")
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	page, pageSize, from, to, err := parseRecordingPageQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	files, err := a.media.ListRecordings(cameraID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo consultar el almacenamiento de grabaciones")
+		return
+	}
+	filtered := recordingsInRange(files, from, to)
+	items, page, totalPages := paginateRecordings(filtered, page, pageSize)
+	response := recordingPageResponse{
+		Items:      items,
+		Timeline:   []media.RecordingFile{},
+		Page:       page,
+		PageSize:   pageSize,
+		Total:      len(filtered),
+		TotalPages: totalPages,
+	}
+	if !from.IsZero() && !to.IsZero() {
+		response.Timeline = filtered
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (a *App) handleRecordingSnapshot(w http.ResponseWriter, r *http.Request) {

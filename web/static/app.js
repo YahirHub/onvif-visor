@@ -19,10 +19,13 @@ const state = {
   monitorSelected: [],
   recordingCameraID: '',
   recordingDate: '',
+  recordingName: '',
+  recordingSummaries: [],
   recordingStorage: { total_bytes: 0, file_count: 0 },
+  recordingPage: { items: [], page: 1, page_size: 24, total: 0, total_pages: 0 },
+  playbackRouteOffset: 0,
   timelineZoom: 1,
   snapshotRevision: Date.now(),
-  pendingPlayback: null,
   sessions: [],
   profile: null,
   telegram: null,
@@ -69,6 +72,7 @@ const viewMeta = {
   cameras: { eyebrow: 'MONITOREO', title: 'Cámaras', subtitle: 'Selecciona una cámara para abrirla.' },
   monitor: { eyebrow: 'MONITOREO', title: 'Multivista', subtitle: 'Vista en vivo.' },
   recordings: { eyebrow: 'ARCHIVO', title: 'Grabaciones', subtitle: 'Historial de vídeo por cámara.' },
+  playback: { eyebrow: 'ARCHIVO', title: 'Reproducción', subtitle: 'Reproductor de grabación.' },
   events: { eyebrow: 'ACTIVIDAD', title: 'Eventos', subtitle: 'Movimiento y eventos recientes.' },
   sessions: { eyebrow: 'SEGURIDAD', title: 'Sesiones', subtitle: 'Accesos persistentes al visor.' },
   profile: { eyebrow: 'CUENTA', title: 'Perfil', subtitle: 'Usuario y contraseña del visor.' },
@@ -86,8 +90,13 @@ const routePathByView = {
 };
 
 function setBrowserRoute(path, { replace = false } = {}) {
-  if (!path || window.location.pathname === path) return;
+  const current = window.location.pathname + window.location.search;
+  if (!path || current === path) return;
   window.history[replace ? 'replaceState' : 'pushState']({}, '', path);
+}
+
+function decodeRoutePart(value) {
+  try { return decodeURIComponent(value); } catch (_) { return ''; }
 }
 
 function parseCurrentRoute() {
@@ -105,12 +114,21 @@ function parseCurrentRoute() {
 
   if (path.startsWith('/camara/')) {
     const cameraID = path.slice('/camara/'.length);
-    if (cameraID && !cameraID.includes('/')) return { view: 'monitor', cameraID: decodeURIComponent(cameraID) };
+    if (cameraID && !cameraID.includes('/')) return { view: 'monitor', cameraID: decodeRoutePart(cameraID) };
   }
   if (path.startsWith('/grabaciones/')) {
-    const recordingCameraID = path.slice('/grabaciones/'.length);
-    if (recordingCameraID && !recordingCameraID.includes('/')) {
-      return { view: 'recordings', recordingCameraID: decodeURIComponent(recordingCameraID) };
+    const parts = path.slice('/grabaciones/'.length).split('/').filter(Boolean);
+    if (parts.length === 2) {
+      const recordingCameraID = decodeRoutePart(parts[0]);
+      const recordingName = decodeRoutePart(parts[1]);
+      const at = Number(new URLSearchParams(window.location.search).get('at')) || 0;
+      if (recordingCameraID && recordingName) {
+        return { view: 'playback', recordingCameraID, recordingName, playbackOffset: Math.max(0, at) };
+      }
+    }
+    if (parts.length === 1) {
+      const recordingCameraID = decodeRoutePart(parts[0]);
+      if (recordingCameraID) return { view: 'recordings', recordingCameraID };
     }
   }
 
@@ -126,13 +144,23 @@ function applyCurrentRoute() {
     }
     state.monitorSelected = [route.cameraID];
   }
-  if (route.clearRecordingCamera) state.recordingCameraID = '';
+  if (route.clearRecordingCamera) {
+    state.recordingCameraID = '';
+    state.recordingName = '';
+  }
   if (route.recordingCameraID) {
     if (!state.cameras.some(camera => camera.id === route.recordingCameraID)) {
       navigate('recordings', { replace: true });
       return;
     }
     state.recordingCameraID = route.recordingCameraID;
+  }
+  if (route.view === 'playback') {
+    state.recordingName = route.recordingName;
+    state.playbackRouteOffset = Math.max(0, Number(route.playbackOffset) || 0);
+  } else if (route.view === 'recordings') {
+    state.recordingName = '';
+    state.playbackRouteOffset = 0;
   }
   if (route.canonicalPath) setBrowserRoute(route.canonicalPath, { replace: route.replace });
   navigate(route.view, { fromHistory: true });
@@ -296,7 +324,7 @@ async function bootstrap() {
 function navigate(view, { path = '', replace = false, fromHistory = false } = {}) {
   if (!viewMeta[view]) return;
   if (state.currentView === 'monitor' && view !== 'monitor') stopMonitorStreams();
-  if (state.currentView === 'recordings' && view !== 'recordings') stopRecordingPlayback();
+  if (state.currentView === 'playback' && view !== 'playback') stopRecordingPlayback();
   if (view !== 'monitor') {
     monitorPicker.classList.remove('open');
     appView.classList.remove('theater-mode');
@@ -305,7 +333,8 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   state.currentView = view;
   appView.dataset.view = view;
 
-  for (const item of $$('.nav-item[data-view]')) item.classList.toggle('active', item.dataset.view === view);
+  const activeNavView = view === 'playback' ? 'recordings' : view;
+  for (const item of $$('.nav-item[data-view]')) item.classList.toggle('active', item.dataset.view === activeNavView);
   for (const section of $$('.app-view')) section.hidden = section.id !== `${view}View`;
 
   const meta = viewMeta[view];
@@ -315,7 +344,10 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   document.title = `${meta.title} · ONVIF Visor`;
   headerActions.hidden = view !== 'cameras';
 
-  if (!fromHistory) setBrowserRoute(path || routePathByView[view], { replace });
+  if (!fromHistory) {
+    const targetPath = path || routePathByView[view];
+    if (targetPath) setBrowserRoute(targetPath, { replace });
+  }
 
   if (view === 'cameras') renderCameras();
   if (view === 'monitor') {
@@ -323,6 +355,7 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
     renderMonitor();
   }
   if (view === 'recordings') loadRecordings();
+  if (view === 'playback') loadDedicatedPlayback();
   if (view === 'events') refreshEvents(false);
   if (view === 'sessions') loadSessions();
   if (view === 'profile') loadProfile();
@@ -860,6 +893,19 @@ function localDateKey(value) {
   return `${y}-${m}-${d}`;
 }
 
+function recordingSummary(cameraID) {
+  return state.recordingSummaries.find(item => item.camera_id === cameraID) || null;
+}
+
+function recordingDateRange() {
+  const bounds = selectedDateBounds();
+  if (!bounds) return null;
+  return {
+    from: new Date(bounds.start).toISOString(),
+    to: new Date(bounds.end).toISOString(),
+  };
+}
+
 async function loadRecordings() {
   const loading = $('#recordingsLoading');
   const empty = $('#recordingsEmpty');
@@ -870,35 +916,31 @@ async function loadRecordings() {
   $('h2', empty).textContent = 'No hay grabaciones almacenadas';
   $('p', empty).textContent = 'Activa la grabación por eventos en una cámara para que los clips aparezcan aquí.';
   workspace.hidden = true;
+
   try {
-    const [recordings, storage] = await Promise.all([
-      api('/api/recordings'),
-      api('/api/recordings/storage'),
-    ]);
-    state.recordings = recordings || [];
-    state.recordingStorage = storage || { total_bytes: 0, file_count: 0 };
+    const summary = await api('/api/recordings/summary');
+    state.recordingSummaries = summary?.cameras || [];
+    state.recordingStorage = {
+      total_bytes: Math.max(0, Number(summary?.total_bytes) || 0),
+      file_count: Math.max(0, Number(summary?.file_count) || 0),
+    };
+
     const cameraStillExists = state.cameras.some(camera => camera.id === state.recordingCameraID);
     if (!cameraStillExists) {
-      const firstWithRecording = state.cameras.find(camera => state.recordings.some(recording => recording.camera_id === camera.id));
+      const firstWithRecording = state.cameras.find(camera => (recordingSummary(camera.id)?.count || 0) > 0);
       state.recordingCameraID = firstWithRecording?.id || state.cameras[0]?.id || '';
+      state.recordingDate = '';
     }
+
     renderRecordingCameraList();
     loading.hidden = true;
     if (!state.cameras.length) {
       empty.hidden = false;
       return;
     }
+
     workspace.hidden = false;
-    const pending = state.pendingPlayback;
-    if (pending) {
-      state.recordingCameraID = pending.cameraID;
-      selectRecordingCamera(pending.cameraID, false);
-      const recording = state.recordings.find(item => item.camera_id === pending.cameraID && item.name === pending.recordingName);
-      state.pendingPlayback = null;
-      if (recording) selectRecording(recording, pending.offset);
-    } else {
-      selectRecordingCamera(state.recordingCameraID, Boolean(state.recordingDate));
-    }
+    await selectRecordingCamera(state.recordingCameraID, Boolean(state.recordingDate));
     setStatus('Biblioteca de grabaciones actualizada', true);
   } catch (error) {
     loading.hidden = true;
@@ -911,7 +953,52 @@ async function loadRecordings() {
 }
 
 function recordingsForCamera(cameraID) {
-  return state.recordings.filter(recording => recording.camera_id === cameraID);
+  if (cameraID !== state.recordingCameraID) return [];
+  return state.recordings;
+}
+
+async function loadRecordingPage(page = 1, { silent = false } = {}) {
+  if (!state.recordingCameraID) return;
+  if (!state.recordingDate) {
+    state.recordingDate = localDateKey(new Date());
+    $('#recordingDate').value = state.recordingDate;
+  }
+  const range = recordingDateRange();
+  if (!range) return;
+
+  const requestCameraID = state.recordingCameraID;
+  const requestDate = state.recordingDate;
+  const params = new URLSearchParams({
+    camera_id: requestCameraID,
+    page: String(Math.max(1, Number(page) || 1)),
+    page_size: String(Math.max(1, Number(state.recordingPage.page_size) || 24)),
+    from: range.from,
+    to: range.to,
+  });
+
+  try {
+    const payload = await api('/api/recordings?' + params.toString());
+    if (state.recordingCameraID !== requestCameraID || state.recordingDate !== requestDate) return;
+
+    state.recordings = payload?.timeline || [];
+    state.recordingPage = {
+      items: payload?.items || [],
+      page: Math.max(1, Number(payload?.page) || 1),
+      page_size: Math.max(1, Number(payload?.page_size) || 24),
+      total: Math.max(0, Number(payload?.total) || 0),
+      total_pages: Math.max(0, Number(payload?.total_pages) || 0),
+    };
+
+    renderRecordingStats();
+    renderRecordingTimeline(state.recordings);
+    renderObjectTimeline(state.recordings);
+    renderRecordingCards(state.recordingPage.items);
+    renderRecordingPagination();
+    loadRecordingAnalytics({ silent: true });
+    loadAnalyticsSummary({ silent: true, force: true });
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError) && !silent) setStatus(error.message, false);
+  }
 }
 
 function objectSegmentsFingerprint(segments) {
@@ -942,7 +1029,7 @@ async function loadRecordingAnalytics({ silent = false } = {}) {
     if (changed) {
       const recordings = recordingsForCamera(state.recordingCameraID);
       renderObjectTimeline(recordings);
-      renderRecordingCards(recordings);
+      renderRecordingCards(state.recordingPage.items || []);
     }
     await loadAnalyticsSummary({ silent: true });
   } catch (error) {
@@ -1076,8 +1163,9 @@ function renderRecordingCameraList() {
   const list = $('#recordingCameraList');
   list.replaceChildren();
   for (const camera of state.cameras) {
-    const recordings = recordingsForCamera(camera.id);
-    const size = recordings.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
+    const summary = recordingSummary(camera.id);
+    const countValue = Math.max(0, Number(summary?.count) || 0);
+    const sizeValue = Math.max(0, Number(summary?.size_bytes) || 0);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'recording-camera-item';
@@ -1087,9 +1175,9 @@ function renderRecordingCameraList() {
     const meta = document.createElement('span');
     const count = document.createElement('span');
     name.textContent = camera.name;
-    meta.textContent = recordings.length ? `${formatBytes(size)} · ${recordings.length} clips` : 'Sin grabaciones';
+    meta.textContent = countValue ? formatBytes(sizeValue) + ' · ' + countValue + ' clips' : 'Sin grabaciones';
     count.className = 'recording-camera-count';
-    count.textContent = String(recordings.length);
+    count.textContent = String(countValue);
     details.append(name, meta);
     button.append(details, count);
     button.addEventListener('click', () => selectRecordingCamera(camera.id, false, true));
@@ -1097,45 +1185,45 @@ function renderRecordingCameraList() {
   }
 }
 
-function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = false) {
+async function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = false) {
   if (!cameraID) return;
-  stopRecordingPlayback();
-  $('#recordingPlayer').hidden = true;
   const cameraChanged = state.recordingCameraID !== cameraID;
   state.recordingCameraID = cameraID;
+  state.recordingName = '';
   if (cameraChanged) {
     state.personSegments = [];
     state.objectSegments = [];
     state.analyticsSummary = null;
     state.analyticsSummaryKey = '';
     state.analyticsSummaryFetchedAt = 0;
+    state.recordingPage = { items: [], page: 1, page_size: 24, total: 0, total_pages: 0 };
   }
-  if (updateRoute) setBrowserRoute(`/grabaciones/${encodeURIComponent(cameraID)}`);
+  if (updateRoute) setBrowserRoute('/grabaciones/' + encodeURIComponent(cameraID));
   const camera = state.cameras.find(item => item.id === cameraID);
-  const recordings = recordingsForCamera(cameraID);
+  const summary = recordingSummary(cameraID);
   if (!preserveDate || !state.recordingDate) {
-    const activeRecording = recordings.find(recording => recording.active);
-    state.recordingDate = activeRecording ? localDateKey(new Date()) : (recordings.length ? localDateKey(recordings[0].started_at) : localDateKey(new Date()));
+    state.recordingDate = summary?.latest_started_at
+      ? localDateKey(summary.latest_started_at)
+      : localDateKey(new Date());
   }
   $('#recordingDate').value = state.recordingDate;
   $('#recordingCameraTitle').textContent = camera?.name || 'Grabaciones';
   renderRecordingCameraList();
-  renderRecordingStats(recordings);
-  renderRecordingTimeline(recordings);
-  renderObjectTimeline(recordings);
-  renderRecordingCards(recordings);
-  loadRecordingAnalytics({ silent: true });
+  renderRecordingStats();
+  await loadRecordingPage(1);
 }
 
-function renderRecordingStats(recordings) {
-  const size = recordings.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
-  const duration = recordings.reduce((sum, recording) => sum + (Number(recording.duration_seconds) || 0), 0);
+function renderRecordingStats() {
+  const summary = recordingSummary(state.recordingCameraID);
+  const count = Math.max(0, Number(summary?.count) || 0);
+  const size = Math.max(0, Number(summary?.size_bytes) || 0);
+  const duration = Math.max(0, Number(summary?.duration_seconds) || 0);
   const totalBytes = Math.max(0, Number(state.recordingStorage?.total_bytes) || 0);
   const totalFiles = Math.max(0, Number(state.recordingStorage?.file_count) || 0);
-  $('#recordingCount').textContent = String(recordings.length);
+  $('#recordingCount').textContent = String(count);
   $('#recordingSize').textContent = formatBytes(size);
   $('#recordingStorageTotal').textContent = formatBytes(totalBytes);
-  $('#recordingStorageMeta').textContent = `total guardado · ${totalFiles} ${totalFiles === 1 ? 'clip' : 'clips'}`;
+  $('#recordingStorageMeta').textContent = 'total guardado · ' + totalFiles + ' ' + (totalFiles === 1 ? 'clip' : 'clips');
   $('#recordingDuration').textContent = formatDuration(duration);
   updateRecordingDeleteAction();
 }
@@ -1182,17 +1270,6 @@ function recordingDeleteFilter() {
   return null;
 }
 
-function recordingsMatchingDeleteFilter(filter) {
-  const recordings = recordingsForCamera(state.recordingCameraID);
-  if (!filter) return [];
-  return recordings.filter(recording => {
-    if (recording.active) return false;
-    if (filter.all) return true;
-    const started = new Date(recording.started_at);
-    return Number.isFinite(started.getTime()) && started >= filter.from && started < filter.to;
-  });
-}
-
 function syncRecordingDeleteScope() {
   const custom = $('#recordingDeleteScope').value === 'custom';
   $('#recordingDeleteCustomRange').hidden = !custom;
@@ -1209,35 +1286,11 @@ function updateRecordingDeleteAction() {
   const allButton = $('#recordingsDeleteAllBtn');
   if (!button || !allButton) return;
   const filter = recordingDeleteFilter();
-  const count = recordingsMatchingDeleteFilter(filter).length;
-  const allCount = recordingsMatchingDeleteFilter({ all: true }).length;
-  button.disabled = !state.recordingCameraID || !filter || count === 0;
-  button.textContent = count > 0 ? `Eliminar filtrados (${count})` : 'Eliminar filtrados';
-  allButton.disabled = !state.recordingCameraID || allCount === 0;
-  allButton.textContent = allCount > 0 ? `Eliminar todos (${allCount})` : 'Eliminar todos';
-}
-
-function applyDeletedRecordings(cameraID, names) {
-  const deleted = new Set(names || []);
-  if (!deleted.size) return;
-  const removed = state.recordings.filter(recording => recording.camera_id === cameraID && deleted.has(recording.name));
-  const removedBytes = removed.reduce((sum, recording) => sum + (Number(recording.size_bytes) || 0), 0);
-  state.recordingStorage.total_bytes = Math.max(0, (Number(state.recordingStorage.total_bytes) || 0) - removedBytes);
-  state.recordingStorage.file_count = Math.max(0, (Number(state.recordingStorage.file_count) || 0) - removed.length);
-  state.recordings = state.recordings.filter(recording => recording.camera_id !== cameraID || !deleted.has(recording.name));
-  state.objectSegments = state.objectSegments.filter(segment => segment.camera_id !== cameraID || !deleted.has(segment.recording_name));
-  state.personSegments = state.objectSegments.filter(segment => segment.class_name === 'person');
-  if (state.playback.recording?.camera_id === cameraID && deleted.has(state.playback.recording.name)) {
-    stopRecordingPlayback();
-    $('#recordingPlayer').hidden = true;
-  }
-  const recordings = recordingsForCamera(cameraID);
-  renderRecordingCameraList();
-  renderRecordingStats(recordings);
-  renderRecordingTimeline(recordings);
-  renderObjectTimeline(recordings);
-  renderRecordingCards(recordings);
-  refreshEvents(false);
+  const total = Math.max(0, Number(recordingSummary(state.recordingCameraID)?.count) || 0);
+  button.disabled = !state.recordingCameraID || !filter || total === 0;
+  button.textContent = 'Eliminar filtrados';
+  allButton.disabled = !state.recordingCameraID || total === 0;
+  allButton.textContent = total > 0 ? 'Eliminar todos (' + total + ')' : 'Eliminar todos';
 }
 
 async function deleteCurrentRecording() {
@@ -1257,7 +1310,10 @@ async function deleteCurrentRecording() {
   button.disabled = true;
   try {
     await api(recordingBaseURL(recording), { method: 'DELETE' });
-    applyDeletedRecordings(recording.camera_id, [recording.name]);
+    const cameraID = recording.camera_id;
+    stopRecordingPlayback();
+    state.recordingName = '';
+    navigate('recordings', { path: '/grabaciones/' + encodeURIComponent(cameraID), replace: true });
     setStatus('Grabación eliminada', true);
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
@@ -1267,16 +1323,16 @@ async function deleteCurrentRecording() {
 }
 
 async function deleteRecordingsByFilter(filter, button) {
-  const matches = recordingsMatchingDeleteFilter(filter);
-  if (!filter || !matches.length) {
-    setStatus('No hay grabaciones cerradas que coincidan con ese filtro.', false);
+  const total = Math.max(0, Number(recordingSummary(state.recordingCameraID)?.count) || 0);
+  if (!filter || !total) {
+    setStatus('No hay grabaciones que coincidan con ese filtro.', false);
     return;
   }
   const camera = state.cameras.find(item => item.id === state.recordingCameraID);
   const accepted = await confirmAction({
-    title: matches.length === 1 ? 'Eliminar 1 grabación' : `Eliminar ${matches.length} grabaciones`,
-    message: `Se eliminarán permanentemente ${matches.length} clips de ${camera?.name || 'esta cámara'} correspondientes a ${filter.label}. Esta acción no se puede deshacer.`,
-    confirmLabel: matches.length === 1 ? 'Eliminar video' : 'Eliminar videos',
+    title: filter.all ? 'Eliminar todas las grabaciones' : 'Eliminar grabaciones filtradas',
+    message: 'Se eliminarán permanentemente los clips cerrados de ' + (camera?.name || 'esta cámara') + ' correspondientes a ' + filter.label + '. Esta acción no se puede deshacer.',
+    confirmLabel: 'Eliminar videos',
   });
   if (!accepted) return;
 
@@ -1286,10 +1342,11 @@ async function deleteRecordingsByFilter(filter, button) {
       ? { camera_id: state.recordingCameraID, all: true }
       : { camera_id: state.recordingCameraID, all: false, from: filter.from.toISOString(), to: filter.to.toISOString() };
     const result = await api('/api/recordings/delete-batch', { method: 'POST', body: JSON.stringify(payload) });
-    applyDeletedRecordings(state.recordingCameraID, result.deleted || []);
     const skipped = Number(result.skipped_active) || 0;
-    const suffix = skipped ? ` · ${skipped} activa${skipped === 1 ? '' : 's'} conservada${skipped === 1 ? '' : 's'}` : '';
-    setStatus(`${result.deleted_count || 0} grabaciones eliminadas${suffix}`, true);
+    const suffix = skipped ? ' · ' + skipped + ' activa' + (skipped === 1 ? '' : 's') + ' conservada' + (skipped === 1 ? '' : 's') : '';
+    await loadRecordings();
+    refreshEvents(false);
+    setStatus((result.deleted_count || 0) + ' grabaciones eliminadas' + suffix, true);
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
   } finally {
@@ -1593,12 +1650,17 @@ function bestObjectSegmentForRecording(recording) {
 function renderRecordingCards(recordings) {
   const list = $('#recordingList');
   list.replaceChildren();
-  $('#recordingListMeta').textContent = `${recordings.length} ${recordings.length === 1 ? 'grabación' : 'grabaciones'}`;
+  const page = state.recordingPage;
+  const first = page.total ? (page.page - 1) * page.page_size + 1 : 0;
+  const last = page.total ? Math.min(page.total, first + recordings.length - 1) : 0;
+  $('#recordingListMeta').textContent = page.total
+    ? first + '–' + last + ' de ' + page.total + ' en ' + state.recordingDate
+    : '0 grabaciones en ' + state.recordingDate;
 
   if (!recordings.length) {
     const empty = document.createElement('div');
     empty.className = 'placeholder-panel';
-    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◫</div><h2>Esta cámara todavía no tiene clips</h2><p>Las grabaciones aparecerán aquí cuando se active un evento compatible.</p>';
+    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◫</div><h2>Sin clips en esta fecha</h2><p>Elige otra fecha o espera a que la cámara genere nuevas grabaciones.</p>';
     list.append(empty);
     return;
   }
@@ -1669,6 +1731,55 @@ function renderRecordingCards(recordings) {
   }
 }
 
+function recordingPaginationPages(page, totalPages) {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  const wanted = new Set([1, totalPages, page - 1, page, page + 1]);
+  const pages = [...wanted].filter(value => value >= 1 && value <= totalPages).sort((a, b) => a - b);
+  const result = [];
+  for (const value of pages) {
+    const previous = result[result.length - 1];
+    if (typeof previous === 'number' && value - previous > 1) result.push('…');
+    result.push(value);
+  }
+  return result;
+}
+
+function renderRecordingPagination() {
+  const nav = $('#recordingPagination');
+  const numbers = $('#recordingPageNumbers');
+  const status = $('#recordingPageStatus');
+  const previous = $('#recordingPagePrev');
+  const next = $('#recordingPageNext');
+  const page = state.recordingPage;
+  if (!nav || !numbers || !status || !previous || !next) return;
+
+  numbers.replaceChildren();
+  const totalPages = Math.max(0, Number(page.total_pages) || 0);
+  nav.hidden = page.total === 0;
+  previous.disabled = totalPages <= 1 || page.page <= 1;
+  next.disabled = totalPages <= 1 || page.page >= totalPages;
+  status.textContent = totalPages ? 'Página ' + page.page + ' de ' + totalPages : 'Sin resultados';
+
+  for (const value of recordingPaginationPages(page.page, totalPages)) {
+    if (value === '…') {
+      const ellipsis = document.createElement('span');
+      ellipsis.className = 'recording-page-ellipsis';
+      ellipsis.textContent = '…';
+      numbers.append(ellipsis);
+      continue;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'recording-page-button';
+    button.classList.toggle('active', value === page.page);
+    button.setAttribute('aria-label', 'Ir a página ' + value);
+    if (value === page.page) button.setAttribute('aria-current', 'page');
+    button.textContent = String(value);
+    button.addEventListener('click', () => loadRecordingPage(value));
+    numbers.append(button);
+  }
+}
+
 function recordingBaseURL(recording) {
   return `/api/recordings/${encodeURIComponent(recording.camera_id)}/${encodeURIComponent(recording.name)}`;
 }
@@ -1681,34 +1792,83 @@ function recordingSnapshotURL(recording, offsetSeconds = null) {
   return `${recordingBaseURL(recording)}/snapshot?at=${offset.toFixed(3)}`;
 }
 
-async function selectRecording(recording, offset = 0) {
-  const recordingStart = new Date(recording.started_at).getTime();
-  const targetTime = Number.isFinite(recordingStart) ? new Date(recordingStart + Math.max(0, Number(offset) || 0) * 1000) : new Date(recording.started_at);
-  state.recordingDate = localDateKey(targetTime);
-  $('#recordingDate').value = state.recordingDate;
-  $('#recordingPlayer').hidden = false;
-  $('#recordingPlayerTitle').textContent = new Date(recording.started_at).toLocaleTimeString();
-  $('#recordingPlayerDate').textContent = new Date(recording.started_at).toLocaleString();
-  $('#recordingDownload').href = `${recordingBaseURL(recording)}/download`;
-  $('#recordingPlaybackLoading').hidden = false;
+function recordingPlaybackPath(cameraID, name, offset = 0) {
+  const base = '/grabaciones/' + encodeURIComponent(cameraID) + '/' + encodeURIComponent(name);
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  return safeOffset > 0 ? base + '?at=' + safeOffset.toFixed(3) : base;
+}
 
-  try {
-    const metadata = await api(`${recordingBaseURL(recording)}/metadata`);
-    if (metadata?.duration_seconds >= 0) Object.assign(recording, metadata);
-  } catch (error) {
-    if (error instanceof SessionRequiredError) return;
-    // Si ffprobe no está disponible el servidor conserva la duración aproximada;
-    // el playback sigue siendo utilizable en vez de bloquear al usuario.
+function selectRecording(recording, offset = 0) {
+  if (!recording?.camera_id || !recording?.name) return;
+  const recordingStart = new Date(recording.started_at).getTime();
+  if (Number.isFinite(recordingStart)) {
+    state.recordingDate = localDateKey(new Date(recordingStart + Math.max(0, Number(offset) || 0) * 1000));
+  }
+  state.recordingCameraID = recording.camera_id;
+  state.recordingName = recording.name;
+  state.playbackRouteOffset = Math.max(0, Number(offset) || 0);
+  navigate('playback', {
+    path: recordingPlaybackPath(recording.camera_id, recording.name, state.playbackRouteOffset),
+  });
+}
+
+async function loadDedicatedPlayback() {
+  stopRecordingPlayback();
+  const loading = $('#playbackLoading');
+  const error = $('#playbackPageError');
+  const player = $('#recordingPlayer');
+  loading.hidden = false;
+  error.hidden = true;
+  player.hidden = true;
+
+  const cameraID = state.recordingCameraID;
+  const name = state.recordingName;
+  if (!cameraID || !name) {
+    loading.hidden = true;
+    error.hidden = false;
+    $('#playbackPageErrorMessage').textContent = 'No se indicó una grabación válida.';
+    return;
   }
 
-  $('#recordingScrubber').max = String(Math.max(.1, Number(recording.duration_seconds) || .1));
-  $('#recordingTotalTime').textContent = formatClock(recording.duration_seconds);
-  startRecordingPlayback(recording, offset);
-  renderRecordingStats(recordingsForCamera(recording.camera_id));
-  renderRecordingTimeline(recordingsForCamera(recording.camera_id));
-  renderObjectTimeline(recordingsForCamera(recording.camera_id));
-  renderRecordingCards(recordingsForCamera(recording.camera_id));
-  $('#recordingPlayer').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const recording = { camera_id: cameraID, name };
+  try {
+    const metadata = await api(recordingBaseURL(recording) + '/metadata');
+    if (state.currentView !== 'playback' || state.recordingCameraID !== cameraID || state.recordingName !== name) return;
+
+    Object.assign(recording, metadata || {});
+    const camera = state.cameras.find(item => item.id === cameraID);
+    state.recordingDate = localDateKey(recording.started_at);
+    $('#recordingPlaybackCamera').textContent = camera?.name || 'Grabación';
+    $('#recordingPlayerTitle').textContent = new Date(recording.started_at).toLocaleTimeString();
+    $('#recordingPlayerDate').textContent = new Date(recording.started_at).toLocaleString();
+    $('#recordingPlayerMeta').textContent = formatDuration(recording.duration_seconds) + ' · ' + formatBytes(recording.size_bytes);
+    $('#recordingDownload').href = recordingBaseURL(recording) + '/download';
+    $('#recordingDeleteBtn').disabled = Boolean(recording.active);
+    $('#recordingDeleteBtn').title = recording.active ? 'La grabación activa no se puede eliminar' : '';
+    $('#recordingScrubber').max = String(Math.max(.1, Number(recording.duration_seconds) || .1));
+    $('#recordingTotalTime').textContent = formatClock(recording.duration_seconds);
+    $('#recordingPlaybackLoading').hidden = false;
+
+    loading.hidden = true;
+    player.hidden = false;
+    startRecordingPlayback(recording, state.playbackRouteOffset);
+  } catch (loadError) {
+    loading.hidden = true;
+    if (loadError instanceof SessionRequiredError) return;
+    error.hidden = false;
+    $('#playbackPageErrorMessage').textContent = loadError.message;
+    setStatus(loadError.message, false);
+  }
+}
+
+function backToRecordingLibrary() {
+  const cameraID = state.recordingCameraID;
+  stopRecordingPlayback();
+  state.recordingName = '';
+  state.playbackRouteOffset = 0;
+  navigate('recordings', {
+    path: cameraID ? '/grabaciones/' + encodeURIComponent(cameraID) : '/grabaciones',
+  });
 }
 
 function startRecordingPlayback(recording, offset = 0) {
@@ -1890,13 +2050,13 @@ function openEventRecording(event) {
   const offsetValue = Number(event.object_confidence) > 0
     ? event.object_offset
     : (Number(event.person_confidence) > 0 ? event.person_offset : event.recording_offset);
-  state.pendingPlayback = {
-    cameraID: event.camera_id,
-    recordingName: event.recording_name,
-    offset: Math.max(0, Number(offsetValue) || 0),
-  };
+  const offset = Math.max(0, Number(offsetValue) || 0);
   state.recordingCameraID = event.camera_id;
-  navigate('recordings', { path: `/grabaciones/${encodeURIComponent(event.camera_id)}` });
+  state.recordingName = event.recording_name;
+  state.playbackRouteOffset = offset;
+  navigate('playback', {
+    path: recordingPlaybackPath(event.camera_id, event.recording_name, offset),
+  });
 }
 
 function smartEventLabel(event) {
@@ -3068,13 +3228,19 @@ timelineViewport.addEventListener('keydown', (event) => {
     timelineViewport.scrollBy({ left: direction * Math.max(80, timelineViewport.clientWidth * .2), behavior: 'smooth' });
   }
 });
-$('#recordingDate').addEventListener('change', (event) => {
+$('#recordingDate').addEventListener('change', async (event) => {
   state.recordingDate = event.target.value;
-  const recordings = recordingsForCamera(state.recordingCameraID);
-  renderRecordingTimeline(recordings);
-  renderObjectTimeline(recordings);
-  loadAnalyticsSummary({ silent: true, force: true });
+  state.analyticsSummary = null;
+  state.analyticsSummaryKey = '';
+  state.analyticsSummaryFetchedAt = 0;
+  await loadRecordingPage(1);
   updateRecordingDeleteAction();
+});
+$('#recordingPagePrev').addEventListener('click', () => {
+  if (state.recordingPage.page > 1) loadRecordingPage(state.recordingPage.page - 1);
+});
+$('#recordingPageNext').addEventListener('click', () => {
+  if (state.recordingPage.page < state.recordingPage.total_pages) loadRecordingPage(state.recordingPage.page + 1);
 });
 $('#recordingPlayPause').addEventListener('click', toggleRecordingPlayback);
 $('#recordingScrubber').addEventListener('input', (event) => {
@@ -3092,12 +3258,8 @@ $('#recordingScrubber').addEventListener('change', (event) => {
     updatePlaybackUI(offset);
   }
 });
-$('#recordingClosePlayer').addEventListener('click', () => {
-  stopRecordingPlayback();
-  $('#recordingPlayer').hidden = true;
-  renderRecordingTimeline(recordingsForCamera(state.recordingCameraID));
-  renderRecordingCards(recordingsForCamera(state.recordingCameraID));
-});
+$('#recordingClosePlayer').addEventListener('click', backToRecordingLibrary);
+$('#playbackErrorBackBtn').addEventListener('click', backToRecordingLibrary);
 
 for (const button of $$('[data-close]')) {
   button.addEventListener('click', () => {

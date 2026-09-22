@@ -186,28 +186,6 @@
                   <div id="analyticsSummaryClasses" class="analytics-summary-classes"></div>
                 </section>
 
-                <section id="recordingPlayer" class="recording-player" hidden>
-                  <div class="recording-player-head">
-                    <div><strong id="recordingPlayerTitle">Reproducción</strong><span id="recordingPlayerDate"></span></div>
-                    <div class="recording-player-actions">
-                      <a id="recordingDownload" class="button ghost" href="#" download>Descargar</a>
-                      <button id="recordingDeleteBtn" class="button danger" type="button">Eliminar</button>
-                      <button id="recordingClosePlayer" class="icon-button" type="button" aria-label="Cerrar reproducción">×</button>
-                    </div>
-                  </div>
-                  <div class="recording-video-frame">
-                    <img id="recordingPlaybackImage" alt="Reproducción de grabación">
-                    <div id="recordingPlaybackLoading" class="monitor-pane-loading"><span class="spinner"></span><span>Preparando…</span></div>
-                    <div id="recordingPlaybackError" class="monitor-pane-error" hidden><strong>No se pudo reproducir</strong><span>Verifica el archivo.</span></div>
-                  </div>
-                  <div class="playback-controls">
-                    <button id="recordingPlayPause" class="button secondary" type="button">Pausar</button>
-                    <span id="recordingCurrentTime" class="mono">00:00</span>
-                    <input id="recordingScrubber" class="recording-scrubber" type="range" min="0" max="1" value="0" step="0.1" aria-label="Posición de reproducción">
-                    <span id="recordingTotalTime" class="mono">00:00</span>
-                  </div>
-                </section>
-
                 <section class="timeline-panel">
                   <div class="timeline-head">
                     <div><h3>Línea de tiempo inteligente</h3><p>Grabaciones y objetos detectados por NanoDet, separados por clase.</p></div>
@@ -266,8 +244,58 @@
                   <button id="recordingsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
                 </div>
                 <div id="recordingList" class="recording-grid"></div>
+                <nav id="recordingPagination" class="recording-pagination" aria-label="Páginas de grabaciones" hidden>
+                  <button id="recordingPagePrev" class="button ghost compact-button" type="button">← Anterior</button>
+                  <div id="recordingPageNumbers" class="recording-page-numbers"></div>
+                  <span id="recordingPageStatus" class="recording-page-status" aria-live="polite"></span>
+                  <button id="recordingPageNext" class="button ghost compact-button" type="button">Siguiente →</button>
+                </nav>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section id="playbackView" class="app-view" hidden>
+          <div class="playback-page">
+            <div class="playback-page-toolbar">
+              <button id="recordingClosePlayer" class="icon-button playback-back" type="button" aria-label="Volver a grabaciones" title="Volver a grabaciones">←</button>
+              <div class="playback-page-copy">
+                <p class="eyebrow">REPRODUCCIÓN</p>
+                <h2 id="recordingPlaybackCamera">Grabación</h2>
+                <p id="recordingPlayerDate" class="subtitle"></p>
+              </div>
+              <div class="recording-player-actions">
+                <a id="recordingDownload" class="button ghost" href="#" download>Descargar</a>
+                <button id="recordingDeleteBtn" class="button danger" type="button">Eliminar</button>
+              </div>
+            </div>
+
+            <div id="playbackLoading" class="placeholder-panel">
+              <span class="spinner"></span><h2>Preparando reproducción</h2><p>Consultando el clip seleccionado…</p>
+            </div>
+            <div id="playbackPageError" class="placeholder-panel" hidden>
+              <div class="empty-icon" aria-hidden="true">◫</div>
+              <h2>No se pudo abrir la grabación</h2>
+              <p id="playbackPageErrorMessage">El clip ya no está disponible.</p>
+              <button id="playbackErrorBackBtn" class="button secondary" type="button">Volver a grabaciones</button>
+            </div>
+
+            <section id="recordingPlayer" class="recording-player dedicated-recording-player" hidden>
+              <div class="recording-player-head">
+                <div><strong id="recordingPlayerTitle">Reproducción</strong><span id="recordingPlayerMeta"></span></div>
+              </div>
+              <div class="recording-video-frame">
+                <img id="recordingPlaybackImage" alt="Reproducción de grabación">
+                <div id="recordingPlaybackLoading" class="monitor-pane-loading"><span class="spinner"></span><span>Preparando…</span></div>
+                <div id="recordingPlaybackError" class="monitor-pane-error" hidden><strong>No se pudo reproducir</strong><span>Verifica el archivo.</span></div>
+              </div>
+              <div class="playback-controls">
+                <button id="recordingPlayPause" class="button secondary" type="button">Pausar</button>
+                <span id="recordingCurrentTime" class="mono">00:00</span>
+                <input id="recordingScrubber" class="recording-scrubber" type="range" min="0" max="1" value="0" step="0.1" aria-label="Posición de reproducción">
+                <span id="recordingTotalTime" class="mono">00:00</span>
+              </div>
+            </section>
           </div>
         </section>
 
