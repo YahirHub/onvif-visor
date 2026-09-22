@@ -159,7 +159,25 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 }
 .nav-item:hover { background: rgba(255,255,255,.035); color: #dfe6ed; }
 .nav-item.active { background: rgba(80,208,173,.09); color: #eaf8f4; }
-.nav-icon { width: 20px; color: #718091; text-align: center; font-size: .95rem; }
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+  color: #718091;
+}
+.nav-icon svg,
+.mobile-logout svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .nav-item.active .nav-icon { color: var(--accent); }
 .sidebar-foot { margin-top: auto; display: grid; gap: .2rem; padding-top: .55rem; }
 .sidebar-health { display: flex; align-items: center; gap: .48rem; padding: .45rem .62rem; color: #708091; font-size: .64rem; }
@@ -505,7 +523,7 @@ dialog form { display: grid; gap: .8rem; }
   .sidebar-brand { justify-content: center; padding-inline: 0; }
   .brand-copy, .nav-item > span:last-child, .sidebar-health > span:last-child { display: none; }
   .nav-item { justify-content: center; padding-inline: .35rem; }
-  .nav-icon { width: auto; }
+  .nav-icon { width: 20px; }
   .recordings-shell { grid-template-columns: 1fr; }
   .recordings-cameras { position: static; max-height: none; padding: 0; }
   .recording-camera-list { display: flex; overflow-x: auto; padding-bottom: .25rem; }
@@ -519,7 +537,7 @@ dialog form { display: grid; gap: .8rem; }
   .nav-list { height: 100%; display: grid; grid-template-columns: repeat(4,1fr); gap: .1rem; }
   .nav-item { display: grid; place-items: center; align-content: center; gap: .08rem; padding: .2rem; font-size: .57rem; }
   .nav-item > span:last-child { display: block; }
-  .nav-icon { font-size: .82rem; }
+  .nav-icon svg { width: 18px; height: 18px; }
   .workspace-header { height: 54px; padding: 0 .75rem; }
   .workspace-header .subtitle { display: none; }
   .workspace-header h1 { font-size: .88rem; }
