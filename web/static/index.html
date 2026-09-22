@@ -163,14 +163,14 @@
                 <span class="spinner"></span><h2>Cargando</h2><p>Consultando grabaciones…</p>
               </div>
               <div id="recordingsEmpty" class="placeholder-panel" hidden>
-                <div class="empty-icon" aria-hidden="true">◫</div><h2>Sin grabaciones</h2><p>Los clips aparecerán cuando una cámara genere eventos.</p>
+                <div class="empty-icon" aria-hidden="true">◫</div><h2>Sin grabaciones</h2><p>Configura grabación por eventos, por horario o continua 24/7 para guardar video.</p>
               </div>
 
               <div id="recordingsWorkspace" hidden>
                 <div class="recording-summary-bar">
                   <div><h2 id="recordingCameraTitle">Grabaciones</h2></div>
                   <div class="recording-stats">
-                    <div><strong id="recordingCount">0</strong><span>clips</span></div>
+                    <div><strong id="recordingCount">0</strong><span>archivos</span></div>
                     <div><strong id="recordingSize">0 MB</strong><span>esta cámara</span></div>
                     <div><strong id="recordingStorageTotal">0 B</strong><span id="recordingStorageMeta">total guardado</span></div>
                     <div><strong id="recordingDuration">0 min</strong><span>vídeo</span></div>
@@ -191,6 +191,7 @@
                     <div><h3>Línea de tiempo inteligente</h3><p>Grabaciones y objetos detectados por NanoDet, separados por clase.</p></div>
                     <div class="timeline-head-actions">
                       <span id="analyticsStatus" class="analytics-status">Analítica…</span>
+                      <button id="recordingOpenDayBtn" class="button secondary compact-button" type="button" hidden>Abrir archivo del día</button>
                       <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
                       <div class="timeline-zoom-controls" role="group" aria-label="Zoom de la línea de tiempo">
                         <button id="timelineZoomOutBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Alejar línea de tiempo" title="Alejar">−</button>
@@ -240,15 +241,15 @@
                 </div>
 
                 <div class="section-toolbar recording-list-head">
-                  <div><h2>Clips</h2><p id="recordingListMeta">0 grabaciones</p></div>
+                  <div><h2>Archivos</h2><p id="recordingListMeta">0 grabaciones</p></div>
                   <button id="recordingsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
                 </div>
                 <div id="recordingList" class="recording-grid"></div>
                 <nav id="recordingPagination" class="recording-pagination" aria-label="Páginas de grabaciones" hidden>
-                  <button id="recordingPagePrev" class="button ghost compact-button" type="button">← Anterior</button>
+                  <a id="recordingPagePrev" class="button ghost compact-button recording-page-link" href="#">← Anterior</a>
                   <div id="recordingPageNumbers" class="recording-page-numbers"></div>
                   <span id="recordingPageStatus" class="recording-page-status" aria-live="polite"></span>
-                  <button id="recordingPageNext" class="button ghost compact-button" type="button">Siguiente →</button>
+                  <a id="recordingPageNext" class="button ghost compact-button recording-page-link" href="#">Siguiente →</a>
                 </nav>
               </div>
             </div>
@@ -283,6 +284,7 @@
             <section id="recordingPlayer" class="recording-player dedicated-recording-player" hidden>
               <div class="recording-player-head">
                 <div><strong id="recordingPlayerTitle">Reproducción</strong><span id="recordingPlayerMeta"></span></div>
+                <span id="recordingDetectionLegend" class="recording-detection-legend" hidden></span>
               </div>
               <div class="recording-video-frame">
                 <img id="recordingPlaybackImage" alt="Reproducción de grabación">
@@ -292,7 +294,10 @@
               <div class="playback-controls">
                 <button id="recordingPlayPause" class="button secondary" type="button">Pausar</button>
                 <span id="recordingCurrentTime" class="mono">00:00</span>
-                <input id="recordingScrubber" class="recording-scrubber" type="range" min="0" max="1" value="0" step="0.1" aria-label="Posición de reproducción">
+                <div class="recording-scrubber-wrap">
+                  <input id="recordingScrubber" class="recording-scrubber" type="range" min="0" max="1" value="0" step="0.1" aria-label="Posición de reproducción">
+                  <div id="recordingDetectionMarkers" class="recording-detection-markers" aria-label="Detecciones de personas en esta grabación"></div>
+                </div>
                 <span id="recordingTotalTime" class="mono">00:00</span>
               </div>
             </section>
@@ -456,31 +461,43 @@
     <form id="scheduleForm" method="dialog">
       <input id="scheduleCameraID" type="hidden">
       <div class="dialog-head">
-        <div><p class="eyebrow">GRABACIÓN PROGRAMADA</p><h2 id="scheduleCameraTitle">Horario</h2></div>
+        <div><p class="eyebrow">GRABACIÓN</p><h2 id="scheduleCameraTitle">Configuración</h2></div>
         <button type="button" class="icon-button" data-close="scheduleDialog" aria-label="Cerrar">×</button>
       </div>
-      <label class="schedule-enable"><input id="scheduleEnabled" type="checkbox"><span>Activar grabación por horario</span></label>
-      <div class="schedule-block">
-        <span class="schedule-label">Días</span>
-        <div class="weekday-grid" id="scheduleDays">
-          <label><input type="checkbox" value="1"><span>Lun</span></label>
-          <label><input type="checkbox" value="2"><span>Mar</span></label>
-          <label><input type="checkbox" value="3"><span>Mié</span></label>
-          <label><input type="checkbox" value="4"><span>Jue</span></label>
-          <label><input type="checkbox" value="5"><span>Vie</span></label>
-          <label><input type="checkbox" value="6"><span>Sáb</span></label>
-          <label><input type="checkbox" value="0"><span>Dom</span></label>
+      <label class="field">Modo de archivo
+        <select id="recordingMode">
+          <option value="off">Sin grabación programada</option>
+          <option value="continuous">Continuo 24/7</option>
+          <option value="schedule">Por horario</option>
+        </select>
+      </label>
+      <div id="continuousRecordingHint" class="recording-mode-note" hidden>
+        <strong>Continuo 24/7</strong>
+        <span>Conserva video todo el tiempo y crea un archivo nuevo cada día según la zona horaria de este navegador. Las detecciones de personas quedan marcadas para saltar directamente a ellas.</span>
+      </div>
+      <div id="scheduleCustomSettings">
+        <div class="schedule-block">
+          <span class="schedule-label">Días</span>
+          <div class="weekday-grid" id="scheduleDays">
+            <label><input type="checkbox" value="1"><span>Lun</span></label>
+            <label><input type="checkbox" value="2"><span>Mar</span></label>
+            <label><input type="checkbox" value="3"><span>Mié</span></label>
+            <label><input type="checkbox" value="4"><span>Jue</span></label>
+            <label><input type="checkbox" value="5"><span>Vie</span></label>
+            <label><input type="checkbox" value="6"><span>Sáb</span></label>
+            <label><input type="checkbox" value="0"><span>Dom</span></label>
+          </div>
         </div>
+        <div class="form-row">
+          <label class="field">Hora de inicio<input id="scheduleStart" type="time" value="00:00" required></label>
+          <label class="field">Hora final<input id="scheduleEnd" type="time" value="23:59" required></label>
+        </div>
+        <p class="hint">Si la hora final es menor que la inicial, termina al día siguiente. Se usa la zona horaria de este navegador.</p>
       </div>
-      <div class="form-row">
-        <label class="field">Hora de inicio<input id="scheduleStart" type="time" value="00:00" required></label>
-        <label class="field">Hora final<input id="scheduleEnd" type="time" value="23:59" required></label>
-      </div>
-      <p class="hint">Si la hora final es menor que la inicial, la grabación termina al día siguiente. Se usa la zona horaria de este navegador.</p>
       <div id="scheduleFormError" class="form-error" role="alert"></div>
       <div class="dialog-actions">
         <button type="button" class="button secondary" data-close="scheduleDialog">Cancelar</button>
-        <button id="saveScheduleBtn" class="button primary" type="submit">Guardar horario</button>
+        <button id="saveScheduleBtn" class="button primary" type="submit">Guardar grabación</button>
       </div>
     </form>
   </dialog>

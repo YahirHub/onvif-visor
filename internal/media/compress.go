@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 const (
-	minCompressionBytes  = 2 << 20
-	compressionRatioKeep = 0.97
+	minCompressionBytes      = 2 << 20
+	compressionRatioKeep     = 0.97
+	maxCompressionClipLength = 6 * time.Hour
 )
 
 func (m *Manager) queueCompression(path string) {
@@ -29,7 +31,7 @@ func (m *Manager) compressRecording(path string) error {
 	if err != nil {
 		return err
 	}
-	if original.Size() < minCompressionBytes {
+	if original.Size() < minCompressionBytes || !compressionSuitableForClip(path, original.ModTime()) {
 		return nil
 	}
 
@@ -91,6 +93,15 @@ func (m *Manager) compressRecording(path string) error {
 		return err
 	}
 	return syncParentDirectory(path)
+}
+
+func compressionSuitableForClip(path string, modified time.Time) bool {
+	started, ok := parseRecordingStart(filepath.Base(path))
+	if !ok {
+		return true
+	}
+	duration := modified.Sub(started)
+	return duration <= 0 || duration <= maxCompressionClipLength
 }
 
 func shouldReplaceWithCompressed(originalBytes, compressedBytes int64) bool {

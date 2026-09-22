@@ -151,7 +151,20 @@ func (a *App) handleAnalyticsObjects(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Cámara no encontrada.")
 		return
 	}
-	segments, err := a.analytics.ObjectSegments(r.Context(), cameraID)
+	recordingName := strings.TrimSpace(r.URL.Query().Get("recording_name"))
+	var (
+		segments []analytics.ObjectSegment
+		err      error
+	)
+	if recordingName != "" {
+		if !a.media.RecordingExists(cameraID, recordingName) {
+			writeError(w, http.StatusNotFound, "Grabación no encontrada.")
+			return
+		}
+		segments, err = a.analytics.ObjectSegmentsForRecording(r.Context(), cameraID, recordingName)
+	} else {
+		segments, err = a.analytics.ObjectSegments(r.Context(), cameraID)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "No se pudieron consultar las detecciones de objetos.")
 		return

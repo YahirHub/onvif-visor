@@ -132,6 +132,7 @@ func (a *App) handleRecordingSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleScheduleSettings(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	previous, _ := a.store.Get(id)
 	var req struct {
 		Enabled  bool   `json:"enabled"`
 		Days     []int  `json:"days"`
@@ -195,6 +196,10 @@ func (a *App) handleScheduleSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no se pudo guardar la programación")
 		return
 	}
+	if continuousSchedule(previous) && !continuousSchedule(cam) {
+		a.media.Stop(id)
+	}
+	a.applySchedules(time.Now())
 	writeJSON(w, http.StatusOK, cam)
 }
 

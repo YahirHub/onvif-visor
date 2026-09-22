@@ -8,7 +8,7 @@ import (
 	"onvif-visor/internal/store"
 )
 
-const schedulePollInterval = 10 * time.Second
+const schedulePollInterval = 2 * time.Second
 
 func (a *App) startScheduler() {
 	go func() {
@@ -41,6 +41,10 @@ func (a *App) applySchedules(now time.Time) {
 		}
 
 		status := a.media.Status(cam.ID)
+		if status.Active && continuousSchedule(cam) && !sameScheduleDate(status.StartedAt, now, scheduleLocation(cam)) {
+			a.media.Stop(cam.ID)
+			status = a.media.Status(cam.ID)
+		}
 		if status.Active && !status.StopAfter.Before(windowEnd.Add(-2*time.Second)) {
 			continue
 		}
@@ -50,7 +54,7 @@ func (a *App) applySchedules(now time.Time) {
 			logCameraError(cam.ID, "schedule-uri", err)
 			continue
 		}
-		duration := time.Until(windowEnd)
+		duration := windowEnd.Sub(now)
 		if duration <= 0 {
 			continue
 		}
@@ -60,17 +64,44 @@ func (a *App) applySchedules(now time.Time) {
 	}
 }
 
+func continuousSchedule(cam store.Camera) bool {
+	if !cam.ScheduleEnabled || cam.ScheduleStart != "00:00" || cam.ScheduleEnd != "00:00" || len(cam.ScheduleDays) != 7 {
+		return false
+	}
+	seen := make(map[int]bool, 7)
+	for _, day := range cam.ScheduleDays {
+		if day < int(time.Sunday) || day > int(time.Saturday) {
+			return false
+		}
+		seen[day] = true
+	}
+	return len(seen) == 7
+}
+
+func scheduleLocation(cam store.Camera) *time.Location {
+	location := time.Local
+	if cam.ScheduleTimezone != "" && cam.ScheduleTimezone != "Local" {
+		if loaded, err := time.LoadLocation(cam.ScheduleTimezone); err == nil {
+			location = loaded
+		}
+	}
+	return location
+}
+
+func sameScheduleDate(a, b time.Time, location *time.Location) bool {
+	if a.IsZero() || b.IsZero() {
+		return false
+	}
+	a, b = a.In(location), b.In(location)
+	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
+}
+
 func scheduledWindowEnd(cam store.Camera, now time.Time) (time.Time, bool) {
 	if !cam.ScheduleEnabled || len(cam.ScheduleDays) == 0 || cam.ScheduleStart == "" || cam.ScheduleEnd == "" {
 		return time.Time{}, false
 	}
 
-	location := time.Local
-	if cam.ScheduleTimezone != "" {
-		if loaded, err := time.LoadLocation(cam.ScheduleTimezone); err == nil {
-			location = loaded
-		}
-	}
+	location := scheduleLocation(cam)
 	localNow := now.In(location)
 	startHour, startMinute, ok := parseClock(cam.ScheduleStart)
 	if !ok {

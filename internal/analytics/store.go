@@ -166,6 +166,54 @@ func (s *Store) UpdateProgress(ctx context.Context, cameraID, recordingName stri
 	return err
 }
 
+func (s *Store) MarkLiveProgress(ctx context.Context, cameraID, recordingName string, progress float64, model string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO recording_analysis(camera_id, recording_name, status, progress_seconds, model, analyzed_at, error)
+VALUES(?,?,'live',?,?,?,'')
+ON CONFLICT(camera_id, recording_name) DO UPDATE SET
+ status='live', progress_seconds=excluded.progress_seconds, model=excluded.model,
+ analyzed_at=excluded.analyzed_at, error=''`, cameraID, recordingName, progress, model, time.Now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("mark live analysis progress: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) LiveProgress(ctx context.Context, cameraID, recordingName, model string) (float64, bool, error) {
+	var progress float64
+	var status, currentModel string
+	err := s.db.QueryRowContext(ctx, `
+SELECT progress_seconds, status, model FROM recording_analysis
+WHERE camera_id=? AND recording_name=?`, cameraID, recordingName).Scan(&progress, &status, &currentModel)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("read live analysis progress: %w", err)
+	}
+	return progress, status == "live" && currentModel == model, nil
+}
+
+func (s *Store) CompleteLiveProgress(ctx context.Context, analysis RecordingAnalysis) error {
+	analyzedAt := analysis.AnalyzedAt
+	if analyzedAt.IsZero() {
+		analyzedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO recording_analysis(camera_id, recording_name, size_bytes, modified_unix_ns, duration_seconds, status, progress_seconds, model, analyzed_at, error)
+VALUES(?,?,?,?,?,'complete',?,?,?,'')
+ON CONFLICT(camera_id, recording_name) DO UPDATE SET
+ size_bytes=excluded.size_bytes, modified_unix_ns=excluded.modified_unix_ns,
+ duration_seconds=excluded.duration_seconds, status='complete', progress_seconds=excluded.progress_seconds,
+ model=excluded.model, analyzed_at=excluded.analyzed_at, error=''`,
+		analysis.CameraID, analysis.RecordingName, analysis.SizeBytes, analysis.ModifiedUnixNS,
+		analysis.DurationSecond, analysis.DurationSecond, analysis.Model, analyzedAt.Unix())
+	if err != nil {
+		return fmt.Errorf("complete live analysis: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) Complete(ctx context.Context, analysis RecordingAnalysis, segments []PersonSegment) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

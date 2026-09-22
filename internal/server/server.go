@@ -181,6 +181,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /multivista", a.handleApp)
 	a.mux.HandleFunc("GET /grabaciones", a.handleApp)
 	a.mux.HandleFunc("GET /grabaciones/{cameraID}", a.handleApp)
+	a.mux.HandleFunc("GET /grabaciones/{cameraID}/pagina/{page}", a.handleApp)
 	a.mux.HandleFunc("GET /grabaciones/{cameraID}/{name}", a.handleApp)
 	a.mux.HandleFunc("GET /eventos", a.handleApp)
 	a.mux.HandleFunc("GET /sesiones", a.handleApp)

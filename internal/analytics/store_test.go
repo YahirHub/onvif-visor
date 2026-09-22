@@ -41,6 +41,65 @@ func TestStoreCompleteAndFingerprint(t *testing.T) {
 	}
 }
 
+func TestLiveProgressCanBeCompletedWithoutDroppingSegments(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.MarkLiveProgress(ctx, "cam", "day.mkv", 3590, AnalysisModelKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertLiveObjectDetection(ctx, "cam", "day.mkv", 0, "person", 120, .82, .9); err != nil {
+		t.Fatal(err)
+	}
+	progress, live, err := s.LiveProgress(ctx, "cam", "day.mkv", AnalysisModelKey)
+	if err != nil || !live || progress != 3590 {
+		t.Fatalf("live progress=%f live=%v err=%v", progress, live, err)
+	}
+	analysis := RecordingAnalysis{
+		CameraID: "cam", RecordingName: "day.mkv", SizeBytes: 9000,
+		ModifiedUnixNS: 123, DurationSecond: 3600, Model: AnalysisModelKey,
+	}
+	if err := s.CompleteLiveProgress(ctx, analysis); err != nil {
+		t.Fatal(err)
+	}
+	needs, err := s.NeedsAnalysis(ctx, "cam", "day.mkv", 9000, 123, AnalysisModelKey)
+	if err != nil || needs {
+		t.Fatalf("completed live recording needs=%v err=%v", needs, err)
+	}
+	segments, err := s.ObjectSegmentsForRecording(ctx, "cam", "day.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].ClassName != "person" || segments[0].PeakSecond != 120 {
+		t.Fatalf("segments=%#v", segments)
+	}
+}
+
+func TestObjectSegmentsForRecordingFiltersOtherFiles(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, name := range []string{"one.mkv", "two.mkv"} {
+		if err := s.UpsertLiveObjectDetection(ctx, "cam", name, 0, "person", 5, .7, .8); err != nil {
+			t.Fatal(err)
+		}
+	}
+	segments, err := s.ObjectSegmentsForRecording(ctx, "cam", "two.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].RecordingName != "two.mkv" {
+		t.Fatalf("filtered segments=%#v", segments)
+	}
+}
+
 func TestUpsertLiveObjectDetectionMergesNearbyPoints(t *testing.T) {
 	ctx := context.Background()
 	s, err := OpenStore(t.TempDir())

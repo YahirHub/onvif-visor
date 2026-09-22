@@ -53,6 +53,35 @@ func TestScheduledWindowEndOvernight(t *testing.T) {
 	}
 }
 
+func TestContinuousScheduleAndDailyWindow(t *testing.T) {
+	loc, err := time.LoadLocation("America/Mexico_City")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam := store.Camera{
+		ScheduleEnabled: true, ScheduleDays: []int{0, 1, 2, 3, 4, 5, 6},
+		ScheduleStart: "00:00", ScheduleEnd: "00:00", ScheduleTimezone: "America/Mexico_City",
+	}
+	if !continuousSchedule(cam) {
+		t.Fatal("expected 24/7 schedule to be continuous")
+	}
+	now := time.Date(2026, time.September, 22, 14, 30, 0, 0, loc)
+	end, active := scheduledWindowEnd(cam, now)
+	if !active {
+		t.Fatal("continuous schedule should be active")
+	}
+	want := time.Date(2026, time.September, 23, 0, 0, 0, 0, loc)
+	if !end.Equal(want) {
+		t.Fatalf("end = %v, want %v", end, want)
+	}
+	if !sameScheduleDate(now.Add(-2*time.Hour), now, loc) {
+		t.Fatal("times on the same local day should match")
+	}
+	if sameScheduleDate(now.Add(-24*time.Hour), now, loc) {
+		t.Fatal("times on different local days should not match")
+	}
+}
+
 func TestScheduledWindowInactiveOutsideSelectedDay(t *testing.T) {
 	now := time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC) // Tuesday
 	cam := store.Camera{

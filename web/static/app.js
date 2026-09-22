@@ -23,7 +23,9 @@ const state = {
   recordingSummaries: [],
   recordingStorage: { total_bytes: 0, file_count: 0 },
   recordingPage: { items: [], page: 1, page_size: 24, total: 0, total_pages: 0 },
+  recordingRoutePage: 1,
   playbackRouteOffset: 0,
+  playbackPersonSegments: [],
   timelineZoom: 1,
   snapshotRevision: Date.now(),
   sessions: [],
@@ -99,6 +101,21 @@ function decodeRoutePart(value) {
   try { return decodeURIComponent(value); } catch (_) { return ''; }
 }
 
+function validDateRouteValue(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : '';
+}
+
+function recordingsPagePath(cameraID, page = 1, date = state.recordingDate) {
+  if (!cameraID) return '/grabaciones';
+  const safePage = Math.max(1, Math.floor(Number(page) || 1));
+  const params = new URLSearchParams();
+  const safeDate = validDateRouteValue(date);
+  if (safeDate) params.set('fecha', safeDate);
+  const base = '/grabaciones/' + encodeURIComponent(cameraID) + '/pagina/' + safePage;
+  const query = params.toString();
+  return query ? base + '?' + query : base;
+}
+
 function parseCurrentRoute() {
   let path = window.location.pathname || '/';
   while (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
@@ -118,17 +135,36 @@ function parseCurrentRoute() {
   }
   if (path.startsWith('/grabaciones/')) {
     const parts = path.slice('/grabaciones/'.length).split('/').filter(Boolean);
+    const params = new URLSearchParams(window.location.search);
+    const recordingDate = validDateRouteValue(params.get('fecha'));
+
+    if (parts.length === 3 && parts[1] === 'pagina') {
+      const recordingCameraID = decodeRoutePart(parts[0]);
+      const recordingPage = Number(parts[2]);
+      if (recordingCameraID && Number.isInteger(recordingPage) && recordingPage >= 1) {
+        return { view: 'recordings', recordingCameraID, recordingPage, recordingDate };
+      }
+    }
     if (parts.length === 2) {
       const recordingCameraID = decodeRoutePart(parts[0]);
       const recordingName = decodeRoutePart(parts[1]);
-      const at = Number(new URLSearchParams(window.location.search).get('at')) || 0;
+      const at = Number(params.get('at')) || 0;
       if (recordingCameraID && recordingName) {
         return { view: 'playback', recordingCameraID, recordingName, playbackOffset: Math.max(0, at) };
       }
     }
     if (parts.length === 1) {
       const recordingCameraID = decodeRoutePart(parts[0]);
-      if (recordingCameraID) return { view: 'recordings', recordingCameraID };
+      if (recordingCameraID) {
+        return {
+          view: 'recordings',
+          recordingCameraID,
+          recordingPage: 1,
+          recordingDate,
+          canonicalPath: recordingsPagePath(recordingCameraID, 1, recordingDate),
+          replace: true,
+        };
+      }
     }
   }
 
@@ -147,6 +183,8 @@ function applyCurrentRoute() {
   if (route.clearRecordingCamera) {
     state.recordingCameraID = '';
     state.recordingName = '';
+    state.recordingDate = '';
+    state.recordingRoutePage = 1;
   }
   if (route.recordingCameraID) {
     if (!state.cameras.some(camera => camera.id === route.recordingCameraID)) {
@@ -155,12 +193,17 @@ function applyCurrentRoute() {
     }
     state.recordingCameraID = route.recordingCameraID;
   }
+  if (route.view === 'recordings') {
+    state.recordingRoutePage = Math.max(1, Number(route.recordingPage) || 1);
+    if (route.recordingDate) state.recordingDate = route.recordingDate;
+  }
   if (route.view === 'playback') {
     state.recordingName = route.recordingName;
     state.playbackRouteOffset = Math.max(0, Number(route.playbackOffset) || 0);
   } else if (route.view === 'recordings') {
     state.recordingName = '';
     state.playbackRouteOffset = 0;
+    state.playbackPersonSegments = [];
   }
   if (route.canonicalPath) setBrowserRoute(route.canonicalPath, { replace: route.replace });
   navigate(route.view, { fromHistory: true });
@@ -514,6 +557,7 @@ function cameraFingerprint(cameras) {
     schedule_days: camera.schedule_days,
     schedule_start: camera.schedule_start,
     schedule_end: camera.schedule_end,
+    schedule_timezone: camera.schedule_timezone,
   })));
 }
 
@@ -534,6 +578,14 @@ async function refreshCamerasRealtime() {
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
   }
+}
+
+function cameraScheduleMode(camera) {
+  if (!camera?.schedule_enabled) return 'off';
+  const days = new Set((camera.schedule_days || []).map(Number));
+  const allDays = days.size === 7 && [0, 1, 2, 3, 4, 5, 6].every(day => days.has(day));
+  if (allDays && camera.schedule_start === '00:00' && camera.schedule_end === '00:00') return 'continuous';
+  return 'schedule';
 }
 
 function cameraMatches(camera, query) {
@@ -576,8 +628,13 @@ function renderCameras() {
     $('.camera-card-meta', card).textContent = [camera.manufacturer, camera.model]
       .filter(Boolean).join(' · ') || 'Cámara ONVIF';
     toggle.checked = Boolean(camera.event_recording);
-    scheduleButton.classList.toggle('active', Boolean(camera.schedule_enabled));
-    scheduleButton.title = camera.schedule_enabled ? 'Horario activo · editar' : 'Programar grabación';
+    const recordingMode = cameraScheduleMode(camera);
+    scheduleButton.classList.toggle('active', recordingMode !== 'off');
+    scheduleButton.textContent = recordingMode === 'continuous' ? '24' : '◷';
+    scheduleButton.title = recordingMode === 'continuous'
+      ? 'Grabación continua 24/7 · editar'
+      : recordingMode === 'schedule' ? 'Horario de grabación activo · editar' : 'Configurar grabación';
+    scheduleButton.setAttribute('aria-label', scheduleButton.title);
 
     image.alt = `Vista previa de ${camera.name}`;
     image.addEventListener('load', () => {
@@ -645,7 +702,7 @@ function renderCameras() {
 function openScheduleDialog(camera) {
   $('#scheduleCameraID').value = camera.id;
   $('#scheduleCameraTitle').textContent = camera.name;
-  $('#scheduleEnabled').checked = Boolean(camera.schedule_enabled);
+  $('#recordingMode').value = cameraScheduleMode(camera);
   $('#scheduleStart').value = camera.schedule_start || '00:00';
   $('#scheduleEnd').value = camera.schedule_end || '23:59';
   $('#scheduleFormError').textContent = '';
@@ -661,10 +718,13 @@ function openScheduleDialog(camera) {
 }
 
 function syncScheduleFormState() {
-  const enabled = $('#scheduleEnabled').checked;
-  $('#scheduleStart').disabled = !enabled;
-  $('#scheduleEnd').disabled = !enabled;
-  for (const input of $$('#scheduleDays input[type="checkbox"]')) input.disabled = !enabled;
+  const mode = $('#recordingMode').value;
+  const scheduled = mode === 'schedule';
+  $('#scheduleCustomSettings').hidden = !scheduled;
+  $('#continuousRecordingHint').hidden = mode !== 'continuous';
+  $('#scheduleStart').disabled = !scheduled;
+  $('#scheduleEnd').disabled = !scheduled;
+  for (const input of $$('#scheduleDays input[type="checkbox"]')) input.disabled = !scheduled;
 }
 
 function openMonitor(cameraID) {
@@ -914,7 +974,7 @@ async function loadRecordings() {
   loading.hidden = false;
   empty.hidden = true;
   $('h2', empty).textContent = 'No hay grabaciones almacenadas';
-  $('p', empty).textContent = 'Activa la grabación por eventos en una cámara para que los clips aparezcan aquí.';
+  $('p', empty).textContent = 'Configura grabación por eventos, por horario o continua 24/7 para guardar video.';
   workspace.hidden = true;
 
   try {
@@ -940,7 +1000,13 @@ async function loadRecordings() {
     }
 
     workspace.hidden = false;
-    await selectRecordingCamera(state.recordingCameraID, Boolean(state.recordingDate));
+    await selectRecordingCamera(
+      state.recordingCameraID,
+      Boolean(state.recordingDate),
+      true,
+      state.recordingRoutePage,
+      true,
+    );
     setStatus('Biblioteca de grabaciones actualizada', true);
   } catch (error) {
     loading.hidden = true;
@@ -988,12 +1054,15 @@ async function loadRecordingPage(page = 1, { silent = false } = {}) {
       total: Math.max(0, Number(payload?.total) || 0),
       total_pages: Math.max(0, Number(payload?.total_pages) || 0),
     };
+    state.recordingRoutePage = state.recordingPage.page;
+    setBrowserRoute(recordingsPagePath(requestCameraID, state.recordingPage.page, requestDate), { replace: true });
 
     renderRecordingStats();
     renderRecordingTimeline(state.recordings);
     renderObjectTimeline(state.recordings);
     renderRecordingCards(state.recordingPage.items);
     renderRecordingPagination();
+    renderRecordingDayAction();
     loadRecordingAnalytics({ silent: true });
     loadAnalyticsSummary({ silent: true, force: true });
   } catch (error) {
@@ -1175,17 +1244,18 @@ function renderRecordingCameraList() {
     const meta = document.createElement('span');
     const count = document.createElement('span');
     name.textContent = camera.name;
-    meta.textContent = countValue ? formatBytes(sizeValue) + ' · ' + countValue + ' clips' : 'Sin grabaciones';
+    const modeLabel = cameraScheduleMode(camera) === 'continuous' ? '24/7 · ' : '';
+    meta.textContent = countValue ? modeLabel + formatBytes(sizeValue) + ' · ' + countValue + ' archivos' : modeLabel + 'Sin grabaciones';
     count.className = 'recording-camera-count';
     count.textContent = String(countValue);
     details.append(name, meta);
     button.append(details, count);
-    button.addEventListener('click', () => selectRecordingCamera(camera.id, false, true));
+    button.addEventListener('click', () => selectRecordingCamera(camera.id, false, true, 1, false));
     list.append(button);
   }
 }
 
-async function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = false) {
+async function selectRecordingCamera(cameraID, preserveDate = false, updateRoute = false, page = 1, replaceRoute = false) {
   if (!cameraID) return;
   const cameraChanged = state.recordingCameraID !== cameraID;
   state.recordingCameraID = cameraID;
@@ -1198,7 +1268,6 @@ async function selectRecordingCamera(cameraID, preserveDate = false, updateRoute
     state.analyticsSummaryFetchedAt = 0;
     state.recordingPage = { items: [], page: 1, page_size: 24, total: 0, total_pages: 0 };
   }
-  if (updateRoute) setBrowserRoute('/grabaciones/' + encodeURIComponent(cameraID));
   const camera = state.cameras.find(item => item.id === cameraID);
   const summary = recordingSummary(cameraID);
   if (!preserveDate || !state.recordingDate) {
@@ -1210,7 +1279,10 @@ async function selectRecordingCamera(cameraID, preserveDate = false, updateRoute
   $('#recordingCameraTitle').textContent = camera?.name || 'Grabaciones';
   renderRecordingCameraList();
   renderRecordingStats();
-  await loadRecordingPage(1);
+  const targetPage = Math.max(1, Number(page) || 1);
+  state.recordingRoutePage = targetPage;
+  if (updateRoute) setBrowserRoute(recordingsPagePath(cameraID, targetPage, state.recordingDate), { replace: replaceRoute });
+  await loadRecordingPage(targetPage);
 }
 
 function renderRecordingStats() {
@@ -1223,7 +1295,7 @@ function renderRecordingStats() {
   $('#recordingCount').textContent = String(count);
   $('#recordingSize').textContent = formatBytes(size);
   $('#recordingStorageTotal').textContent = formatBytes(totalBytes);
-  $('#recordingStorageMeta').textContent = 'total guardado · ' + totalFiles + ' ' + (totalFiles === 1 ? 'clip' : 'clips');
+  $('#recordingStorageMeta').textContent = 'total guardado · ' + totalFiles + ' ' + (totalFiles === 1 ? 'archivo' : 'archivos');
   $('#recordingDuration').textContent = formatDuration(duration);
   updateRecordingDeleteAction();
 }
@@ -1313,7 +1385,7 @@ async function deleteCurrentRecording() {
     const cameraID = recording.camera_id;
     stopRecordingPlayback();
     state.recordingName = '';
-    navigate('recordings', { path: '/grabaciones/' + encodeURIComponent(cameraID), replace: true });
+    navigate('recordings', { path: recordingsPagePath(cameraID, 1, state.recordingDate), replace: true });
     setStatus('Grabación eliminada', true);
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
@@ -1636,6 +1708,39 @@ function renderObjectTimeline(recordings) {
   }
 }
 
+function primaryRecordingForSelectedDay() {
+  let best = null;
+  for (const recording of state.recordings || []) {
+    if (!best || Number(recording.duration_seconds || 0) > Number(best.duration_seconds || 0)) best = recording;
+  }
+  return best;
+}
+
+function renderRecordingDayAction() {
+  const button = $('#recordingOpenDayBtn');
+  if (!button) return;
+  const recording = primaryRecordingForSelectedDay();
+  const camera = state.cameras.find(item => item.id === state.recordingCameraID);
+  const continuous = cameraScheduleMode(camera) === 'continuous';
+  const longFile = Number(recording?.duration_seconds || 0) >= 30 * 60;
+  button.hidden = !recording || (!continuous && !longFile);
+  if (!button.hidden) {
+    button.textContent = recording.active ? 'Abrir archivo de hoy' : 'Abrir archivo del día';
+    button.title = 'Abrir el archivo más largo guardado para la fecha seleccionada';
+  }
+}
+
+function bestPersonSegmentForRecording(recording) {
+  let best = null;
+  for (const segment of state.personSegments) {
+    if (segment.camera_id !== recording.camera_id || segment.recording_name !== recording.name) continue;
+    const score = Number(segment.best_score) || Number(segment.max_confidence) || 0;
+    const bestValue = best ? (Number(best.best_score) || Number(best.max_confidence) || 0) : -1;
+    if (!best || score > bestValue) best = segment;
+  }
+  return best;
+}
+
 function bestObjectSegmentForRecording(recording) {
   let best = null;
   for (const segment of state.objectSegments) {
@@ -1660,7 +1765,7 @@ function renderRecordingCards(recordings) {
   if (!recordings.length) {
     const empty = document.createElement('div');
     empty.className = 'placeholder-panel';
-    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◫</div><h2>Sin clips en esta fecha</h2><p>Elige otra fecha o espera a que la cámara genere nuevas grabaciones.</p>';
+    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◫</div><h2>Sin archivos en esta fecha</h2><p>Elige otra fecha o espera a que la cámara genere nuevas grabaciones.</p>';
     list.append(empty);
     return;
   }
@@ -1725,7 +1830,28 @@ function renderRecordingCards(recordings) {
     duration.textContent = formatDuration(recording.duration_seconds);
     size.textContent = formatBytes(recording.size_bytes);
     meta.append(duration, size);
-    body.append(title, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'recording-card-actions';
+    const openFile = document.createElement('button');
+    openFile.type = 'button';
+    openFile.className = 'recording-card-action';
+    openFile.textContent = 'Abrir archivo';
+    openFile.addEventListener('click', () => selectRecording(recording, 0));
+    actions.append(openFile);
+
+    const personSegment = bestPersonSegmentForRecording(recording);
+    if (personSegment) {
+      const jumpPerson = document.createElement('button');
+      jumpPerson.type = 'button';
+      jumpPerson.className = 'recording-card-action person';
+      jumpPerson.textContent = 'Ir a persona';
+      jumpPerson.title = 'Saltar a la detección de persona con mejor puntuación';
+      jumpPerson.addEventListener('click', () => selectRecording(recording, Number(personSegment.peak_seconds) || 0));
+      actions.append(jumpPerson);
+    }
+
+    body.append(title, meta, actions);
     card.append(preview, body);
     list.append(card);
   }
@@ -1756,8 +1882,16 @@ function renderRecordingPagination() {
   numbers.replaceChildren();
   const totalPages = Math.max(0, Number(page.total_pages) || 0);
   nav.hidden = page.total === 0;
-  previous.disabled = totalPages <= 1 || page.page <= 1;
-  next.disabled = totalPages <= 1 || page.page >= totalPages;
+  const previousEnabled = totalPages > 1 && page.page > 1;
+  const nextEnabled = totalPages > 1 && page.page < totalPages;
+  if (previousEnabled) previous.href = recordingsPagePath(state.recordingCameraID, page.page - 1, state.recordingDate);
+  else previous.removeAttribute('href');
+  if (nextEnabled) next.href = recordingsPagePath(state.recordingCameraID, page.page + 1, state.recordingDate);
+  else next.removeAttribute('href');
+  previous.classList.toggle('disabled', !previousEnabled);
+  next.classList.toggle('disabled', !nextEnabled);
+  previous.setAttribute('aria-disabled', String(!previousEnabled));
+  next.setAttribute('aria-disabled', String(!nextEnabled));
   status.textContent = totalPages ? 'Página ' + page.page + ' de ' + totalPages : 'Sin resultados';
 
   for (const value of recordingPaginationPages(page.page, totalPages)) {
@@ -1768,15 +1902,14 @@ function renderRecordingPagination() {
       numbers.append(ellipsis);
       continue;
     }
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'recording-page-button';
-    button.classList.toggle('active', value === page.page);
-    button.setAttribute('aria-label', 'Ir a página ' + value);
-    if (value === page.page) button.setAttribute('aria-current', 'page');
-    button.textContent = String(value);
-    button.addEventListener('click', () => loadRecordingPage(value));
-    numbers.append(button);
+    const link = document.createElement('a');
+    link.className = 'recording-page-button';
+    link.classList.toggle('active', value === page.page);
+    link.setAttribute('aria-label', 'Ir a página ' + value);
+    if (value === page.page) link.setAttribute('aria-current', 'page');
+    link.href = recordingsPagePath(state.recordingCameraID, value, state.recordingDate);
+    link.textContent = String(value);
+    numbers.append(link);
   }
 }
 
@@ -1820,6 +1953,9 @@ async function loadDedicatedPlayback() {
   loading.hidden = false;
   error.hidden = true;
   player.hidden = true;
+  state.playbackPersonSegments = [];
+  $('#recordingDetectionMarkers').replaceChildren();
+  $('#recordingDetectionLegend').hidden = true;
 
   const cameraID = state.recordingCameraID;
   const name = state.recordingName;
@@ -1852,6 +1988,7 @@ async function loadDedicatedPlayback() {
     loading.hidden = true;
     player.hidden = false;
     startRecordingPlayback(recording, state.playbackRouteOffset);
+    loadPlaybackPersonMarkers(recording);
   } catch (loadError) {
     loading.hidden = true;
     if (loadError instanceof SessionRequiredError) return;
@@ -1861,13 +1998,64 @@ async function loadDedicatedPlayback() {
   }
 }
 
+async function loadPlaybackPersonMarkers(recording) {
+  const markerBox = $('#recordingDetectionMarkers');
+  markerBox.replaceChildren();
+  try {
+    const params = new URLSearchParams({
+      camera_id: recording.camera_id,
+      recording_name: recording.name,
+    });
+    const segments = await api('/api/analytics/objects?' + params.toString());
+    if (state.currentView !== 'playback'
+        || state.recordingCameraID !== recording.camera_id
+        || state.recordingName !== recording.name) return;
+    state.playbackPersonSegments = (segments || []).filter(segment => segment.class_name === 'person');
+    renderPlaybackPersonMarkers(recording);
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) {
+      state.playbackPersonSegments = [];
+      markerBox.replaceChildren();
+      $('#recordingDetectionLegend').hidden = true;
+    }
+  }
+}
+
+function renderPlaybackPersonMarkers(recording) {
+  const box = $('#recordingDetectionMarkers');
+  const legend = $('#recordingDetectionLegend');
+  box.replaceChildren();
+  const duration = Math.max(0, Number(recording.duration_seconds) || 0);
+  const count = state.playbackPersonSegments.length;
+  legend.hidden = count === 0;
+  legend.textContent = count === 1 ? '1 detección de persona' : count + ' detecciones de persona';
+  if (duration <= 0) return;
+
+  for (const segment of state.playbackPersonSegments) {
+    const offset = Math.max(0, Math.min(duration, Number(segment.peak_seconds) || 0));
+    const marker = document.createElement('button');
+    marker.type = 'button';
+    marker.className = 'recording-detection-marker';
+    marker.style.left = String(Math.max(0, Math.min(100, offset / duration * 100))) + '%';
+    const confidence = Math.round((Number(segment.max_confidence) || 0) * 100);
+    marker.title = 'Persona · ' + formatClock(offset) + ' · ' + confidence + '%';
+    marker.setAttribute('aria-label', 'Ir a detección de persona en ' + formatClock(offset));
+    marker.addEventListener('click', () => {
+      state.playbackRouteOffset = offset;
+      setBrowserRoute(recordingPlaybackPath(recording.camera_id, recording.name, offset), { replace: true });
+      startRecordingPlayback(recording, offset);
+    });
+    box.append(marker);
+  }
+}
+
 function backToRecordingLibrary() {
   const cameraID = state.recordingCameraID;
   stopRecordingPlayback();
   state.recordingName = '';
   state.playbackRouteOffset = 0;
   navigate('recordings', {
-    path: cameraID ? '/grabaciones/' + encodeURIComponent(cameraID) : '/grabaciones',
+    path: cameraID ? recordingsPagePath(cameraID, 1, state.recordingDate) : '/grabaciones',
   });
 }
 
@@ -3080,25 +3268,28 @@ $('#analyticsDialog').addEventListener('close', () => {
   $('#analyticsPreviewImage').removeAttribute('src');
 });
 
-$('#scheduleEnabled').addEventListener('change', syncScheduleFormState);
+$('#recordingMode').addEventListener('change', syncScheduleFormState);
 
 $('#scheduleForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const cameraID = $('#scheduleCameraID').value;
-  const enabled = $('#scheduleEnabled').checked;
-  const days = $$('#scheduleDays input[type="checkbox"]:checked').map(input => Number(input.value));
-  const start = $('#scheduleStart').value;
-  const end = $('#scheduleEnd').value;
+  const mode = $('#recordingMode').value;
+  const enabled = mode !== 'off';
+  const days = mode === 'continuous'
+    ? [0, 1, 2, 3, 4, 5, 6]
+    : $$('#scheduleDays input[type="checkbox"]:checked').map(input => Number(input.value));
+  const start = mode === 'continuous' ? '00:00' : $('#scheduleStart').value;
+  const end = mode === 'continuous' ? '00:00' : $('#scheduleEnd').value;
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
   const errorBox = $('#scheduleFormError');
   const saveButton = $('#saveScheduleBtn');
   errorBox.textContent = '';
 
-  if (enabled && !days.length) {
+  if (mode === 'schedule' && !days.length) {
     errorBox.textContent = 'Selecciona al menos un día.';
     return;
   }
-  if (enabled && (!start || !end)) {
+  if (mode === 'schedule' && (!start || !end)) {
     errorBox.textContent = 'Selecciona la hora de inicio y la hora final.';
     return;
   }
@@ -3113,7 +3304,10 @@ $('#scheduleForm').addEventListener('submit', async (event) => {
     if (camera && updated) Object.assign(camera, updated);
     scheduleDialog.close();
     renderCameras();
-    setStatus(enabled ? 'Horario de grabación activado' : 'Horario de grabación desactivado', true);
+    const message = mode === 'continuous'
+      ? 'Grabación continua 24/7 activada'
+      : mode === 'schedule' ? 'Horario de grabación activado' : 'Grabación programada desactivada';
+    setStatus(message, true);
   } catch (error) {
     if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
   } finally {
@@ -3228,19 +3422,16 @@ timelineViewport.addEventListener('keydown', (event) => {
     timelineViewport.scrollBy({ left: direction * Math.max(80, timelineViewport.clientWidth * .2), behavior: 'smooth' });
   }
 });
-$('#recordingDate').addEventListener('change', async (event) => {
+$('#recordingDate').addEventListener('change', (event) => {
   state.recordingDate = event.target.value;
   state.analyticsSummary = null;
   state.analyticsSummaryKey = '';
   state.analyticsSummaryFetchedAt = 0;
-  await loadRecordingPage(1);
-  updateRecordingDeleteAction();
+  window.location.assign(recordingsPagePath(state.recordingCameraID, 1, state.recordingDate));
 });
-$('#recordingPagePrev').addEventListener('click', () => {
-  if (state.recordingPage.page > 1) loadRecordingPage(state.recordingPage.page - 1);
-});
-$('#recordingPageNext').addEventListener('click', () => {
-  if (state.recordingPage.page < state.recordingPage.total_pages) loadRecordingPage(state.recordingPage.page + 1);
+$('#recordingOpenDayBtn').addEventListener('click', () => {
+  const recording = primaryRecordingForSelectedDay();
+  if (recording) selectRecording(recording, 0);
 });
 $('#recordingPlayPause').addEventListener('click', toggleRecordingPlayback);
 $('#recordingScrubber').addEventListener('input', (event) => {

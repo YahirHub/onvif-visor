@@ -18,10 +18,13 @@ import (
 )
 
 const (
-	frameSize          = InputWidth * InputHeight * 3
-	scanInterval       = 15 * time.Second
-	liveRestartDelay   = 3 * time.Second
-	progressEveryFrame = 10
+	frameSize                     = InputWidth * InputHeight * 3
+	scanInterval                  = 15 * time.Second
+	liveRestartDelay              = 3 * time.Second
+	progressEveryFrame            = 10
+	liveProgressInterval          = 10 * time.Second
+	longRecordingSeconds          = 6 * 60 * 60
+	liveProgressCoverageTolerance = 15
 )
 
 type Config struct {
@@ -167,6 +170,10 @@ func (m *Manager) Segments(ctx context.Context, cameraID string) ([]PersonSegmen
 
 func (m *Manager) ObjectSegments(ctx context.Context, cameraID string) ([]ObjectSegment, error) {
 	return m.store.ObjectSegments(ctx, cameraID)
+}
+
+func (m *Manager) ObjectSegmentsForRecording(ctx context.Context, cameraID, recordingName string) ([]ObjectSegment, error) {
+	return m.store.ObjectSegmentsForRecording(ctx, cameraID, recordingName)
 }
 
 func (m *Manager) SmartEvents(ctx context.Context, cameraID string, from, to time.Time) ([]SmartEvent, error) {
@@ -381,6 +388,26 @@ func (m *Manager) scanOnce(force bool) {
 				continue
 			}
 			if !force {
+				if file.DurationSecond >= longRecordingSeconds {
+					progress, live, err := m.store.LiveProgress(m.ctx, source.ID, file.Name, AnalysisModelKey)
+					if err != nil {
+						m.setLastError(err)
+						continue
+					}
+					if live && file.DurationSecond-progress <= liveProgressCoverageTolerance {
+						analysis := RecordingAnalysis{
+							CameraID: source.ID, RecordingName: file.Name,
+							SizeBytes: info.Size(), ModifiedUnixNS: info.ModTime().UnixNano(),
+							DurationSecond: file.DurationSecond, Model: AnalysisModelKey,
+							AnalyzedAt: time.Now().UTC(),
+						}
+						if err := m.store.CompleteLiveProgress(m.ctx, analysis); err != nil {
+							m.setLastError(err)
+						} else {
+							continue
+						}
+					}
+				}
 				needs, err := m.store.NeedsAnalysis(m.ctx, source.ID, file.Name, info.Size(), info.ModTime().UnixNano(), AnalysisModelKey)
 				if err != nil {
 					m.setLastError(err)
@@ -569,6 +596,8 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 		return err
 	}
 	frame := make([]byte, width*height*3)
+	var lastProgressAt time.Time
+	lastProgressRecording := ""
 	for {
 		if _, err := io.ReadFull(stdout, frame); err != nil {
 			waitErr := cmd.Wait()
@@ -591,20 +620,28 @@ func (m *Manager) watchLive(ctx context.Context, cameraID, streamURI string) err
 			m.rememberPersonFrame(cameraID, float32(confidence))
 		}
 
+		now := time.Now().UTC()
 		status := m.media.Status(cameraID)
 		recordingName := ""
 		offset := 0.0
 		if status.Active && status.Path != "" && !status.StartedAt.IsZero() {
 			recordingName = filepath.Base(status.Path)
-			offset = time.Since(status.StartedAt).Seconds()
+			offset = now.Sub(status.StartedAt).Seconds()
 			if offset < 0 {
 				offset = 0
+			}
+			if recordingName != lastProgressRecording || lastProgressAt.IsZero() || now.Sub(lastProgressAt) >= liveProgressInterval {
+				if err := m.store.MarkLiveProgress(ctx, cameraID, recordingName, offset, AnalysisModelKey); err != nil {
+					m.setLastError(err)
+				} else {
+					lastProgressRecording = recordingName
+					lastProgressAt = now
+				}
 			}
 			for _, point := range pointsForFrame(offset, detections, enabled) {
 				_ = m.store.UpsertLiveObjectDetection(ctx, cameraID, recordingName, point.ClassID, point.ClassName, offset, point.Confidence, point.BestScore)
 			}
 		}
-		now := time.Now().UTC()
 		events := tracker.Process(cameraID, recordingName, offset, now, detections, width, height, cfg)
 		if len(events) > 0 {
 			if err := m.store.InsertSmartEvents(ctx, events); err != nil {

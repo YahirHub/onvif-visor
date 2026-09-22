@@ -115,9 +115,19 @@ func (s *Store) DeleteCameraConfig(ctx context.Context, cameraID string) error {
 }
 
 func (s *Store) ObjectSegments(ctx context.Context, cameraID string) ([]ObjectSegment, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return s.queryObjectSegments(ctx, `
 SELECT id, camera_id, recording_name, class_id, class_name, start_seconds, end_seconds, peak_seconds, max_confidence, best_score, source
 FROM object_segments WHERE camera_id=? ORDER BY recording_name DESC, start_seconds ASC, class_id ASC`, cameraID)
+}
+
+func (s *Store) ObjectSegmentsForRecording(ctx context.Context, cameraID, recordingName string) ([]ObjectSegment, error) {
+	return s.queryObjectSegments(ctx, `
+SELECT id, camera_id, recording_name, class_id, class_name, start_seconds, end_seconds, peak_seconds, max_confidence, best_score, source
+FROM object_segments WHERE camera_id=? AND recording_name=? ORDER BY start_seconds ASC, class_id ASC`, cameraID, recordingName)
+}
+
+func (s *Store) queryObjectSegments(ctx context.Context, query string, args ...any) ([]ObjectSegment, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query object segments: %w", err)
 	}
