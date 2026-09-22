@@ -46,48 +46,32 @@
 
       <nav class="nav-list">
         <button class="nav-item active" type="button" data-view="cameras" title="Cámaras">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><rect x="3.5" y="6.5" width="17" height="12" rx="2"></rect><circle cx="12" cy="12.5" r="3.25"></circle><path d="M8 6.5l1.2-2h5.6l1.2 2"></path></svg>
-          </span><span>Cámaras</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="camera">▣</i></span><span>Cámaras</span>
         </button>
         <button class="nav-item" type="button" data-view="monitor" title="Multivista">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="7" height="7" rx="1.4"></rect><rect x="13.5" y="4" width="7" height="7" rx="1.4"></rect><rect x="3.5" y="14" width="7" height="6" rx="1.4"></rect><rect x="13.5" y="14" width="7" height="6" rx="1.4"></rect></svg>
-          </span><span>Multivista</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="layout-grid">▦</i></span><span>Multivista</span>
         </button>
         <button class="nav-item" type="button" data-view="recordings" title="Grabaciones">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"></rect><path d="M10 9l5 3-5 3z"></path></svg>
-          </span><span>Grabaciones</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="video">◫</i></span><span>Grabaciones</span>
         </button>
         <button class="nav-item" type="button" data-view="events" title="Eventos">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M4 13h3l2-5 3.2 9 2.4-6H20"></path><path d="M4 5.5h16v13H4z" opacity=".35"></path></svg>
-          </span><span>Eventos</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="activity">◉</i></span><span>Eventos</span>
         </button>
         <button class="nav-item" type="button" data-view="sessions" title="Sesiones">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"></rect><path d="M8 20h8M10 16v4M14 16v4"></path></svg>
-          </span><span>Sesiones</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="monitor-smartphone">◎</i></span><span>Sesiones</span>
         </button>
         <button class="nav-item" type="button" data-view="profile" title="Perfil">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.7-4 3-6 7-6s6.3 2 7 6"></path></svg>
-          </span><span>Perfil</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="user-round">◇</i></span><span>Perfil</span>
         </button>
         <button class="nav-item" type="button" data-view="integrations" title="Integraciones">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M7 8h10v2a5 5 0 0 1-5 5v0a5 5 0 0 1-5-5V8z"></path><path d="M12 15v6"></path></svg>
-          </span><span>Integraciones</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="plug">⌘</i></span><span>Integraciones</span>
         </button>
       </nav>
 
       <div class="sidebar-foot">
         <div class="sidebar-health" title="Estado del servicio"><span id="sidebarDot" class="dot"></span><span id="sidebarStatus">Conectando…</span></div>
         <button id="logoutBtn" class="nav-item logout-item" type="button" hidden title="Cerrar sesión">
-          <span class="nav-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M10 5H5.5A2.5 2.5 0 0 0 3 7.5v9A2.5 2.5 0 0 0 5.5 19H10"></path><path d="M14 8l4 4-4 4M18 12H8"></path></svg>
-          </span><span>Cerrar sesión</span>
+          <span class="nav-icon" aria-hidden="true"><i data-lucide="log-out">↪</i></span><span>Cerrar sesión</span>
         </button>
       </div>
     </aside>
@@ -102,11 +86,9 @@
         <div class="workspace-header-actions">
           <div id="headerActions" class="header-actions">
             <button id="discoverBtn" class="button secondary" type="button">Detectar</button>
-            <button id="addBtn" class="button primary" type="button">+ Cámara</button>
+            <button id="addBtn" class="button primary" type="button"><i data-lucide="plus" aria-hidden="true">+</i><span>Cámara</span></button>
           </div>
-          <button id="logoutMobileBtn" class="icon-button mobile-logout" type="button" aria-label="Cerrar sesión" title="Cerrar sesión" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5.5A2.5 2.5 0 0 0 3 7.5v9A2.5 2.5 0 0 0 5.5 19H10"></path><path d="M14 8l4 4-4 4M18 12H8"></path></svg>
-          </button>
+          <button id="logoutMobileBtn" class="icon-button mobile-logout" type="button" aria-label="Cerrar sesión" title="Cerrar sesión" hidden><i data-lucide="log-out">↪</i></button>
         </div>
       </header>
 
@@ -114,15 +96,15 @@
         <section id="camerasView" class="app-view">
           <div class="toolbar-card">
             <div class="search-box">
-              <span aria-hidden="true">⌕</span>
+              <span aria-hidden="true"><i data-lucide="search">⌕</i></span>
               <input id="cameraSearch" type="search" placeholder="Buscar cámara…" autocomplete="off">
             </div>
             <div class="toolbar-meta"><strong id="cameraCount">0</strong><span>cámaras</span></div>
-            <button id="refreshSnapshotsBtn" class="button ghost compact-button" type="button" title="Actualizar miniaturas">↻</button>
+            <button id="refreshSnapshotsBtn" class="button ghost compact-button" type="button" title="Actualizar miniaturas" aria-label="Actualizar miniaturas"><i data-lucide="refresh-cw" aria-hidden="true">↻</i></button>
           </div>
           <div id="cameraGrid" class="camera-thumbnail-grid"></div>
           <div id="emptyState" class="empty-state">
-            <div class="empty-icon" aria-hidden="true">▣</div>
+            <div class="empty-icon" aria-hidden="true"><i data-lucide="camera-off">▣</i></div>
             <h2>No hay cámaras</h2>
             <p>Detecta dispositivos ONVIF o agrega un endpoint manualmente.</p>
             <div class="empty-actions">
@@ -136,7 +118,7 @@
         <section id="cameraSettingsView" class="app-view" hidden>
           <div class="camera-settings-page">
             <div class="camera-settings-toolbar">
-              <button id="cameraSettingsBack" class="icon-button" type="button" aria-label="Volver a cámaras">←</button>
+              <button id="cameraSettingsBack" class="icon-button" type="button" aria-label="Volver a cámaras"><i data-lucide="arrow-left" aria-hidden="true">←</i></button>
               <div class="camera-settings-heading">
                 <p class="eyebrow">CONFIGURACIÓN DE CÁMARA</p>
                 <h2 id="cameraSettingsTitle">Cámara</h2>
@@ -256,11 +238,11 @@
         <section id="monitorView" class="app-view" hidden>
           <div class="monitor-toolbar">
             <div class="monitor-toolbar-left">
-              <button id="backToCamerasBtn" class="icon-button monitor-back" type="button" aria-label="Volver a cámaras" title="Cámaras">←</button>
+              <button id="backToCamerasBtn" class="icon-button monitor-back" type="button" aria-label="Volver a cámaras" title="Cámaras"><i data-lucide="arrow-left" aria-hidden="true">←</i></button>
               <div><strong id="monitorTitle">Vista en vivo</strong><span id="monitorMeta">0 cámaras</span></div>
             </div>
             <div class="monitor-toolbar-actions">
-              <button id="monitorFullscreenBtn" class="button ghost" type="button" title="Pantalla completa" aria-label="Pantalla completa">⛶</button>
+              <button id="monitorFullscreenBtn" class="button ghost icon-only-button" type="button" title="Pantalla completa" aria-label="Pantalla completa"><i data-lucide="maximize-2" aria-hidden="true">⛶</i></button>
               <button id="singleViewBtn" class="button ghost" type="button">1 cámara</button>
               <button id="togglePickerBtn" class="button secondary" type="button">Cámaras</button>
             </div>
@@ -279,10 +261,10 @@
             <aside id="monitorPicker" class="monitor-picker" aria-label="Seleccionar cámaras">
               <div class="picker-head">
                 <div><strong>Cámaras</strong><span id="pickerCount">0 / 9</span></div>
-                <button id="closePickerBtn" class="icon-button" type="button" aria-label="Cerrar selector">×</button>
+                <button id="closePickerBtn" class="icon-button" type="button" aria-label="Cerrar selector"><i data-lucide="x" aria-hidden="true">×</i></button>
               </div>
               <div class="search-box compact">
-                <span aria-hidden="true">⌕</span>
+                <span aria-hidden="true"><i data-lucide="search">⌕</i></span>
                 <input id="pickerSearch" type="search" placeholder="Buscar…" autocomplete="off">
               </div>
               <div id="pickerList" class="picker-list"></div>
@@ -302,7 +284,7 @@
                 <span class="spinner"></span><h2>Cargando</h2><p>Consultando grabaciones…</p>
               </div>
               <div id="recordingsEmpty" class="placeholder-panel" hidden>
-                <div class="empty-icon" aria-hidden="true">◫</div><h2>Sin grabaciones</h2><p>Configura grabación por eventos, por horario o continua 24/7 para guardar video.</p>
+                <div class="empty-icon" aria-hidden="true"><i data-lucide="video-off">◫</i></div><h2>Sin grabaciones</h2><p>Configura grabación por eventos, por horario o continua 24/7 para guardar video.</p>
               </div>
 
               <div id="recordingsWorkspace" hidden>
@@ -334,9 +316,9 @@
                       <button id="timelineDetailsBtn" class="button ghost compact-button timeline-details-button" type="button" aria-expanded="false">Ver todas las clases</button>
                       <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
                       <div class="timeline-zoom-controls" role="group" aria-label="Zoom de la línea de tiempo">
-                        <button id="timelineZoomOutBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Alejar línea de tiempo" title="Alejar">−</button>
+                        <button id="timelineZoomOutBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Alejar línea de tiempo" title="Alejar"><i data-lucide="minus" aria-hidden="true">−</i></button>
                         <button id="timelineZoomResetBtn" class="timeline-zoom-reset" type="button" title="Restablecer a 24 horas"><span id="timelineZoomLabel">24 h</span></button>
-                        <button id="timelineZoomInBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Acercar línea de tiempo" title="Acercar">+</button>
+                        <button id="timelineZoomInBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Acercar línea de tiempo" title="Acercar"><i data-lucide="plus" aria-hidden="true">+</i></button>
                       </div>
                       <label class="date-filter"><span>Fecha</span><input id="recordingDate" type="date"></label>
                     </div>
@@ -360,14 +342,14 @@
 
                 <div class="section-toolbar recording-list-head">
                   <div><h2>Archivos</h2><p id="recordingListMeta">0 grabaciones</p></div>
-                  <button id="recordingsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
+                  <button id="recordingsRefreshBtn" class="button ghost compact-button icon-only-button" type="button" title="Actualizar" aria-label="Actualizar"><i data-lucide="refresh-cw" aria-hidden="true">↻</i></button>
                 </div>
                 <div id="recordingList" class="recording-grid"></div>
                 <nav id="recordingPagination" class="recording-pagination" aria-label="Páginas de grabaciones" hidden>
-                  <a id="recordingPagePrev" class="button ghost recording-page-link recording-page-arrow" href="#" aria-label="Página anterior" title="Página anterior">&lt;</a>
+                  <a id="recordingPagePrev" class="button ghost recording-page-link recording-page-arrow" href="#" aria-label="Página anterior" title="Página anterior"><i data-lucide="chevron-left" aria-hidden="true">&lt;</i></a>
                   <div id="recordingPageNumbers" class="recording-page-numbers"></div>
                   <span id="recordingPageStatus" class="recording-page-status" aria-live="polite"></span>
-                  <a id="recordingPageNext" class="button ghost recording-page-link recording-page-arrow" href="#" aria-label="Página siguiente" title="Página siguiente">&gt;</a>
+                  <a id="recordingPageNext" class="button ghost recording-page-link recording-page-arrow" href="#" aria-label="Página siguiente" title="Página siguiente"><i data-lucide="chevron-right" aria-hidden="true">&gt;</i></a>
                 </nav>
 
                 <div class="recording-retention-bar">
@@ -401,7 +383,7 @@
         <section id="playbackView" class="app-view" hidden>
           <div class="playback-page">
             <div class="playback-page-toolbar">
-              <button id="recordingClosePlayer" class="icon-button playback-back" type="button" aria-label="Volver a grabaciones" title="Volver a grabaciones">←</button>
+              <button id="recordingClosePlayer" class="icon-button playback-back" type="button" aria-label="Volver a grabaciones" title="Volver a grabaciones"><i data-lucide="arrow-left" aria-hidden="true">←</i></button>
               <div class="playback-page-copy">
                 <p class="eyebrow">REPRODUCCIÓN</p>
                 <h2 id="recordingPlaybackCamera">Grabación</h2>
@@ -417,7 +399,7 @@
               <span class="spinner"></span><h2>Preparando reproducción</h2><p>Consultando el clip seleccionado…</p>
             </div>
             <div id="playbackPageError" class="placeholder-panel" hidden>
-              <div class="empty-icon" aria-hidden="true">◫</div>
+              <div class="empty-icon" aria-hidden="true"><i data-lucide="video-off">◫</i></div>
               <h2>No se pudo abrir la grabación</h2>
               <p id="playbackPageErrorMessage">El clip ya no está disponible.</p>
               <button id="playbackErrorBackBtn" class="button secondary" type="button">Volver a grabaciones</button>
@@ -449,7 +431,7 @@
         <section id="eventsView" class="app-view" hidden>
           <div class="section-toolbar">
             <div><h2>Actividad</h2><p>Movimiento y eventos recientes.</p></div>
-            <button id="eventsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
+            <button id="eventsRefreshBtn" class="button ghost compact-button icon-only-button" type="button" title="Actualizar" aria-label="Actualizar"><i data-lucide="refresh-cw" aria-hidden="true">↻</i></button>
           </div>
           <div id="eventsList" class="events-list"></div>
         </section>
@@ -504,16 +486,16 @@
           </div>
           <div class="integration-grid">
             <button id="telegramOpenBtn" class="integration-card" type="button">
-              <span class="integration-logo" aria-hidden="true">↗</span>
+              <span class="integration-logo" aria-hidden="true"><i data-lucide="send">↗</i></span>
               <span><strong>Telegram</strong><small id="telegramCardStatus">Sin configurar</small></span>
-              <span aria-hidden="true">›</span>
+              <span aria-hidden="true"><i data-lucide="chevron-right">›</i></span>
             </button>
           </div>
 
           <section id="telegramPanel" class="integration-panel" hidden>
             <div class="integration-panel-head">
               <div><p class="eyebrow">TELEGRAM BOT</p><h2>Telegram</h2><p id="telegramSummary" class="hint">Conecta un bot para alertas y consultas remotas.</p></div>
-              <button id="telegramPanelCloseBtn" class="icon-button" type="button" aria-label="Cerrar configuración">×</button>
+              <button id="telegramPanelCloseBtn" class="icon-button" type="button" aria-label="Cerrar configuración"><i data-lucide="x" aria-hidden="true">×</i></button>
             </div>
 
             <div id="telegramLoading" class="integration-skeleton" hidden aria-hidden="true">
@@ -541,17 +523,18 @@
               <form id="telegramSettingsForm" class="settings-form">
                 <label class="settings-check"><input id="telegramNotificationsEnabled" type="checkbox"><span>Enviar alertas por detección/eventos</span></label>
                 <div class="form-row">
-                  <label class="field">Medio de las alertas automáticas
+                  <label class="field">Alertas automáticas de persona
                     <select id="telegramMediaMode">
-                      <option value="photo">Foto con persona detectada</option>
-                      <option value="video">Fragmento de vídeo</option>
+                      <option value="photo">Foto + botón Ver video</option>
+                      <option value="video">Video de la persona</option>
+                      <option value="photo_video">Foto + video automático</option>
                     </select>
                   </label>
-                  <label class="field">Duración de vídeo por defecto
+                  <label class="field">Máximo por video
                     <input id="telegramVideoSeconds" type="number" min="3" max="60" value="5" inputmode="numeric">
                   </label>
                 </div>
-                <p class="hint">El medio anterior sólo define qué envían las alertas automáticas; no cambia los comandos <span class="mono">/foto</span> ni <span class="mono">/video</span>. La duración se usa cuando una alerta envía vídeo y también en <span class="mono">/video Cámara</span>; puedes sobrescribirla con <span class="mono">/video Cámara 30</span> (3–60 s).</p>
+                <p class="hint">Las fotos de persona incluyen <strong>Ver video</strong>. Telegram inicia o extiende la grabación necesaria y recorta el tramo donde NanoDet mantuvo a la persona visible, respetando este máximo. La duración también sigue siendo el valor por defecto de <span class="mono">/video Cámara</span>; puedes sobrescribirla con <span class="mono">/video Cámara 30</span> (3–60 s).</p>
                 <button id="telegramSaveSettingsBtn" class="button secondary" type="submit">Guardar opciones</button>
               </form>
 
@@ -586,7 +569,7 @@
 
   <dialog id="cameraDialog">
     <form id="cameraForm" method="dialog">
-      <div class="dialog-head"><div><p class="eyebrow">NUEVA CÁMARA</p><h2>Agregar ONVIF</h2></div><button type="button" class="icon-button" data-close="cameraDialog" aria-label="Cerrar">×</button></div>
+      <div class="dialog-head"><div><p class="eyebrow">NUEVA CÁMARA</p><h2>Agregar ONVIF</h2></div><button type="button" class="icon-button" data-close="cameraDialog" aria-label="Cerrar"><i data-lucide="x" aria-hidden="true">×</i></button></div>
       <label class="field">Nombre<input id="cameraName" name="name" autocomplete="off" placeholder="Entrada principal"></label>
       <label class="field">Endpoint ONVIF<input id="cameraEndpoint" name="endpoint" required autocomplete="url" placeholder="http://192.168.1.50/onvif/device_service"></label>
       <div class="form-row">
@@ -604,7 +587,7 @@
       <input id="scheduleCameraID" type="hidden">
       <div class="dialog-head">
         <div><p class="eyebrow">GRABACIÓN</p><h2 id="scheduleCameraTitle">Configuración</h2></div>
-        <button type="button" class="icon-button" data-close="scheduleDialog" aria-label="Cerrar">×</button>
+        <button type="button" class="icon-button" data-close="scheduleDialog" aria-label="Cerrar"><i data-lucide="x" aria-hidden="true">×</i></button>
       </div>
       <label class="field">Modo de archivo
         <select id="recordingMode">
@@ -646,7 +629,7 @@
 
   <dialog id="analyticsDialog" class="wide-dialog analytics-dialog">
     <form id="analyticsConfigForm" method="dialog">
-      <div class="dialog-head"><div><p class="eyebrow">VISIÓN LOCAL</p><h2 id="analyticsDialogTitle">Analítica inteligente</h2><p id="analyticsDialogSubtitle" class="hint">Clases, zonas, líneas y reglas por cámara.</p></div><button type="button" class="icon-button" data-close="analyticsDialog" aria-label="Cerrar">×</button></div>
+      <div class="dialog-head"><div><p class="eyebrow">VISIÓN LOCAL</p><h2 id="analyticsDialogTitle">Analítica inteligente</h2><p id="analyticsDialogSubtitle" class="hint">Clases, zonas, líneas y reglas por cámara.</p></div><button type="button" class="icon-button" data-close="analyticsDialog" aria-label="Cerrar"><i data-lucide="x" aria-hidden="true">×</i></button></div>
       <div id="analyticsConfigLoading" class="analytics-config-loading"><span class="spinner"></span><span>Cargando configuración…</span></div>
       <div id="analyticsConfigError" class="form-error" role="alert"></div>
       <div id="analyticsConfigContent" class="analytics-config-layout" hidden>
@@ -656,8 +639,8 @@
             <svg id="analyticsOverlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="Zonas y líneas configuradas"></svg>
           </div>
           <div class="analytics-draw-toolbar">
-            <button id="analyticsDrawZoneBtn" class="button secondary" type="button">+ Zona</button>
-            <button id="analyticsDrawLineBtn" class="button secondary" type="button">+ Línea</button>
+            <button id="analyticsDrawZoneBtn" class="button secondary" type="button"><i data-lucide="plus" aria-hidden="true">+</i><span>Zona</span></button>
+            <button id="analyticsDrawLineBtn" class="button secondary" type="button"><i data-lucide="plus" aria-hidden="true">+</i><span>Línea</span></button>
             <button id="analyticsFinishDrawBtn" class="button primary" type="button" hidden>Terminar</button>
             <button id="analyticsCancelDrawBtn" class="button ghost" type="button" hidden>Cancelar dibujo</button>
           </div>
@@ -705,7 +688,7 @@
   </dialog>
 
   <dialog id="discoveryDialog" class="wide-dialog">
-    <div class="dialog-head"><div><p class="eyebrow">WS-DISCOVERY</p><h2>Dispositivos encontrados</h2></div><button type="button" class="icon-button" data-close="discoveryDialog" aria-label="Cerrar">×</button></div>
+    <div class="dialog-head"><div><p class="eyebrow">WS-DISCOVERY</p><h2>Dispositivos encontrados</h2></div><button type="button" class="icon-button" data-close="discoveryDialog" aria-label="Cerrar"><i data-lucide="x" aria-hidden="true">×</i></button></div>
     <p id="discoveryStatus" class="hint">Buscando cámaras ONVIF en la red local…</p>
     <div id="discoveryList" class="discovery-list"></div>
     <div class="dialog-actions"><button type="button" class="button secondary" data-close="discoveryDialog">Cerrar</button></div>
@@ -713,7 +696,7 @@
 
   <dialog id="confirmDialog" class="confirm-dialog">
     <form method="dialog">
-      <div class="dialog-head"><div><p class="eyebrow">CONFIRMACIÓN</p><h2 id="confirmTitle">Confirmar acción</h2></div><button type="submit" value="cancel" class="icon-button" aria-label="Cerrar">×</button></div>
+      <div class="dialog-head"><div><p class="eyebrow">CONFIRMACIÓN</p><h2 id="confirmTitle">Confirmar acción</h2></div><button type="submit" value="cancel" class="icon-button" aria-label="Cerrar"><i data-lucide="x" aria-hidden="true">×</i></button></div>
       <p id="confirmMessage" class="confirm-copy"></p>
       <div class="dialog-actions"><button type="submit" value="cancel" class="button secondary">Cancelar</button><button id="confirmAcceptBtn" type="submit" value="confirm" class="button danger-solid">Confirmar</button></div>
     </form>
@@ -723,22 +706,13 @@
     <article class="camera-thumb-card">
       <button class="camera-thumb-media" type="button">
         <img class="camera-thumb-image" alt="" loading="lazy">
-        <div class="camera-thumb-fallback" hidden><span aria-hidden="true">▣</span><strong>Sin vista previa</strong></div>
+        <div class="camera-thumb-fallback" hidden><span aria-hidden="true"><i data-lucide="camera-off">▣</i></span><strong>Sin vista previa</strong></div>
         <span class="live-chip"><i></i><span class="camera-status-text">CARGANDO</span></span>
         <span class="open-overlay"><strong class="camera-card-name"></strong><small class="camera-card-meta"></small></span>
       </button>
       <div class="camera-hover-actions">
-        <button class="camera-settings icon-button" type="button" aria-label="Configurar cámara" title="Configurar cámara">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 7h10"></path><path d="M18 7h2"></path><circle cx="16" cy="7" r="2"></circle>
-            <path d="M4 17h2"></path><path d="M10 17h10"></path><circle cx="8" cy="17" r="2"></circle>
-          </svg>
-        </button>
-        <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M7 7l10 10"></path><path d="M17 7L7 17"></path>
-          </svg>
-        </button>
+        <button class="camera-settings icon-button" type="button" aria-label="Configurar cámara" title="Configurar cámara"><i data-lucide="sliders-horizontal" aria-hidden="true">⚙</i></button>
+        <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar"><i data-lucide="x" aria-hidden="true">×</i></button>
       </div>
     </article>
   </template>
@@ -748,10 +722,11 @@
       <img class="monitor-live-image" alt="Transmisión en vivo">
       <div class="monitor-pane-loading"><span class="spinner small-spinner"></span><span>Conectando…</span></div>
       <div class="monitor-pane-error" hidden><strong>Sin señal</strong><span>No se pudo abrir la transmisión.</span></div>
-      <div class="monitor-pane-overlay"><span class="monitor-pane-name"></span><button class="monitor-remove" type="button" aria-label="Quitar de multivista">×</button></div>
+      <div class="monitor-pane-overlay"><span class="monitor-pane-name"></span><button class="monitor-remove" type="button" aria-label="Quitar de multivista"><i data-lucide="x" aria-hidden="true">×</i></button></div>
     </article>
   </template>
 
+  <script src="https://unpkg.com/lucide@1.47.0" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

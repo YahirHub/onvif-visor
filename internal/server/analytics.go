@@ -77,6 +77,8 @@ func (a *App) handleSmartAnalyticsEvent(event analytics.SmartEvent) {
 		a.events = a.events[:200]
 	}
 	a.eventsMu.Unlock()
+	event.RecordingName = recordingName
+	event.OffsetSecond = recordingOffset
 	if event.NotifyTelegram {
 		go a.notifyTelegramSmartEvent(cam, event)
 	}

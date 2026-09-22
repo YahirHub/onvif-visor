@@ -22,6 +22,8 @@ import (
 	tg "onvif-visor/internal/telegram"
 )
 
+const telegramPersonVideoCallbackPrefix = "pv:"
+
 type telegramStatusView struct {
 	Configured           bool                   `json:"configured"`
 	BotID                int64                  `json:"bot_id,omitempty"`
@@ -76,8 +78,8 @@ func (a *App) handleTelegramSave(w http.ResponseWriter, r *http.Request) {
 	if req.VideoSeconds == 0 {
 		req.VideoSeconds = account.TelegramVideoDefaultSeconds
 	}
-	if req.MediaMode != "photo" && req.MediaMode != "video" {
-		writeError(w, http.StatusBadRequest, "El medio debe ser foto o vídeo.")
+	if req.MediaMode != "photo" && req.MediaMode != "video" && req.MediaMode != "photo_video" {
+		writeError(w, http.StatusBadRequest, "El medio debe ser foto, vídeo o foto + vídeo.")
 		return
 	}
 	if req.VideoSeconds < account.TelegramVideoMinSeconds || req.VideoSeconds > account.TelegramVideoMaxSeconds {
@@ -237,10 +239,153 @@ func (a *App) telegramPollLoop(ctx context.Context, token string) {
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
+			if update.CallbackQuery != nil {
+				a.handleTelegramCallback(ctx, client, token, *update.CallbackQuery)
+				continue
+			}
 			if update.Message == nil || strings.TrimSpace(update.Message.Text) == "" {
 				continue
 			}
 			a.handleTelegramMessage(ctx, client, token, *update.Message)
+		}
+	}
+}
+
+func (a *App) handleTelegramCallback(ctx context.Context, client *tg.Client, token string, query tg.CallbackQuery) {
+	if query.Message == nil {
+		_ = client.AnswerCallbackQuery(ctx, token, query.ID, "Acción no disponible.")
+		return
+	}
+	chatID := query.Message.Chat.ID
+	linked, err := a.accounts.TelegramChatLinked(ctx, chatID)
+	if err != nil || !linked {
+		_ = client.AnswerCallbackQuery(ctx, token, query.ID, "Chat no vinculado.")
+		return
+	}
+	if !strings.HasPrefix(query.Data, telegramPersonVideoCallbackPrefix) {
+		_ = client.AnswerCallbackQuery(ctx, token, query.ID, "Acción no reconocida.")
+		return
+	}
+	actionID := strings.TrimPrefix(query.Data, telegramPersonVideoCallbackPrefix)
+	action, ok, err := a.accounts.GetTelegramMediaAction(ctx, actionID, chatID)
+	if err != nil || !ok {
+		_ = client.AnswerCallbackQuery(ctx, token, query.ID, "El video ya no está disponible.")
+		return
+	}
+	_ = client.AnswerCallbackQuery(ctx, token, query.ID, "Preparando video…")
+	go a.sendTelegramPersonVideoAction(token, action)
+}
+
+func (a *App) sendTelegramPersonVideoAction(token string, action account.TelegramMediaAction) {
+	client := tg.New()
+	select {
+	case a.telegramNotifySem <- struct{}{}:
+		defer func() { <-a.telegramNotifySem }()
+	default:
+		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+		defer cancel()
+		_ = client.SendMessage(ctx, token, action.ChatID, "Ya se está generando otro medio. Intenta de nuevo en unos segundos.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.ctx, time.Duration(account.TelegramVideoMaxSeconds)*time.Second+35*time.Second)
+	defer cancel()
+	cfg, ok, err := a.accounts.GetTelegramConfig(ctx)
+	if err != nil || !ok {
+		return
+	}
+	maxSeconds := cfg.VideoSeconds
+	if maxSeconds < account.TelegramVideoMinSeconds || maxSeconds > account.TelegramVideoMaxSeconds {
+		maxSeconds = account.TelegramVideoDefaultSeconds
+	}
+	path, clipDuration, err := a.telegramPersonRecordingClip(ctx, action.CameraID, action.RecordingName, action.OffsetSecond, maxSeconds)
+	if err != nil {
+		_ = client.SendMessage(ctx, token, action.ChatID, "No se pudo generar el video de esa detección. Puede que la grabación ya no esté disponible.")
+		return
+	}
+	defer os.Remove(path)
+	name := action.CameraID
+	if cam, getErr := a.store.Get(action.CameraID); getErr == nil {
+		name = cam.Name
+	}
+	caption := "🎥 Persona · " + name + " · " + strconv.Itoa(int(math.Ceil(clipDuration.Seconds()))) + " s"
+	if err := client.SendVideoFile(ctx, token, action.ChatID, path, caption); err != nil {
+		_ = client.SendMessage(ctx, token, action.ChatID, "El video se generó, pero Telegram no pudo recibirlo.")
+	}
+}
+
+func (a *App) personSegmentNear(ctx context.Context, cameraID, recordingName string, offset float64) (analytics.ObjectSegment, bool, error) {
+	if a.analytics == nil {
+		return analytics.ObjectSegment{}, false, nil
+	}
+	segments, err := a.analytics.ObjectSegmentsForRecording(ctx, cameraID, recordingName)
+	if err != nil {
+		return analytics.ObjectSegment{}, false, err
+	}
+	bestDistance := math.MaxFloat64
+	var best analytics.ObjectSegment
+	found := false
+	for _, segment := range segments {
+		if segment.ClassName != "person" {
+			continue
+		}
+		distance := 0.0
+		if offset < segment.StartSecond {
+			distance = segment.StartSecond - offset
+		} else if offset > segment.EndSecond {
+			distance = offset - segment.EndSecond
+		}
+		if distance < bestDistance {
+			bestDistance = distance
+			best = segment
+			found = true
+		}
+	}
+	if !found || bestDistance > 4 {
+		return analytics.ObjectSegment{}, false, nil
+	}
+	return best, true, nil
+}
+
+func (a *App) telegramPersonRecordingClip(ctx context.Context, cameraID, recordingName string, offset float64, maxSeconds int) (string, time.Duration, error) {
+	if maxSeconds < account.TelegramVideoMinSeconds || maxSeconds > account.TelegramVideoMaxSeconds {
+		maxSeconds = account.TelegramVideoDefaultSeconds
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(maxSeconds+8)*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		metadata, metaErr := a.media.RecordingMetadata(waitCtx, cameraID, recordingName)
+		if metaErr != nil {
+			return "", 0, metaErr
+		}
+		segment, found, segmentErr := a.personSegmentNear(waitCtx, cameraID, recordingName, offset)
+		if segmentErr != nil {
+			return "", 0, segmentErr
+		}
+		if found {
+			start := math.Max(0, segment.StartSecond)
+			end := math.Max(start+1, segment.EndSecond)
+			durationSeconds := end - start
+			settled := !metadata.Active || metadata.DurationSecond-end >= 3.5
+			if durationSeconds >= float64(maxSeconds) {
+				durationSeconds = float64(maxSeconds)
+				settled = true
+			}
+			if settled {
+				duration := time.Duration(math.Ceil(durationSeconds*1000)) * time.Millisecond
+				path, clipErr := a.media.RecordingClip(waitCtx, cameraID, recordingName, start, duration)
+				return path, duration, clipErr
+			}
+		}
+		select {
+		case <-waitCtx.Done():
+			fallback := time.Duration(maxSeconds) * time.Second
+			start := math.Max(0, offset-1)
+			path, clipErr := a.media.RecordingClip(ctx, cameraID, recordingName, start, fallback)
+			return path, fallback, clipErr
+		case <-ticker.C:
 		}
 	}
 }
@@ -525,6 +670,100 @@ func (a *App) telegramPersonPhoto(ctx context.Context, cam store.Camera, status 
 	return a.media.Snapshot(ctx, streamURI)
 }
 
+func (a *App) sendTelegramLiveVideoToChats(ctx context.Context, client *tg.Client, token string, chats []account.TelegramChat, cam store.Camera, seconds int, caption string) {
+	if seconds < account.TelegramVideoMinSeconds || seconds > account.TelegramVideoMaxSeconds {
+		seconds = account.TelegramVideoDefaultSeconds
+	}
+	streamURI, err := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+	if err != nil {
+		return
+	}
+	path, err := a.media.CaptureClip(ctx, streamURI, time.Duration(seconds)*time.Second)
+	if err != nil {
+		return
+	}
+	defer os.Remove(path)
+	for _, chat := range chats {
+		if chat.Enabled {
+			_ = client.SendVideoFile(ctx, token, chat.ChatID, path, caption)
+		}
+	}
+}
+func telegramPersonRecordWindow(cfg account.TelegramConfig) time.Duration {
+	seconds := cfg.VideoSeconds
+	if seconds < account.TelegramVideoMinSeconds || seconds > account.TelegramVideoMaxSeconds {
+		seconds = account.TelegramVideoDefaultSeconds
+	}
+	return time.Duration(seconds+8) * time.Second
+}
+
+func (a *App) ensureTelegramPersonRecording(cam store.Camera, cfg account.TelegramConfig) media.RecordingStatus {
+	status := a.media.Status(cam.ID)
+	streamURI, err := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+	if err != nil {
+		return status
+	}
+	next, err := a.media.Trigger(cam.ID, streamURI, telegramPersonRecordWindow(cfg))
+	if err != nil {
+		logCameraError(cam.ID, "telegram-person-record", err)
+		return status
+	}
+	return next
+}
+func (a *App) sendTelegramPersonPhoto(ctx context.Context, client *tg.Client, token string, chat account.TelegramChat, cam store.Camera, recordingName string, offset float64, image []byte, caption string) {
+	if !chat.Enabled {
+		return
+	}
+	if recordingName != "" {
+		action, err := a.accounts.CreateTelegramMediaAction(ctx, chat.ChatID, cam.ID, recordingName, offset)
+		if err == nil {
+			_ = client.SendPhotoWithCallbackButton(ctx, token, chat.ChatID, image, caption, "Ver video", telegramPersonVideoCallbackPrefix+action.ID)
+			return
+		}
+	}
+	_ = client.SendPhoto(ctx, token, chat.ChatID, image, caption)
+}
+
+func (a *App) sendTelegramPersonVideoToChats(ctx context.Context, client *tg.Client, token string, chats []account.TelegramChat, cam store.Camera, recordingName string, offset float64, maxSeconds int, caption string) {
+	if maxSeconds < account.TelegramVideoMinSeconds || maxSeconds > account.TelegramVideoMaxSeconds {
+		maxSeconds = account.TelegramVideoDefaultSeconds
+	}
+	var path string
+	var duration time.Duration
+	var err error
+	if recordingName != "" {
+		path, duration, err = a.telegramPersonRecordingClip(ctx, cam.ID, recordingName, offset, maxSeconds)
+	}
+	if err != nil || path == "" {
+		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+		if uriErr != nil {
+			return
+		}
+		duration = time.Duration(maxSeconds) * time.Second
+		path, err = a.media.CaptureClip(ctx, streamURI, duration)
+		if err != nil {
+			return
+		}
+	}
+	defer os.Remove(path)
+	videoCaption := caption + "\nVideo · " + strconv.Itoa(int(math.Ceil(duration.Seconds()))) + " s"
+	for _, chat := range chats {
+		if chat.Enabled {
+			_ = client.SendVideoFile(ctx, token, chat.ChatID, path, videoCaption)
+		}
+	}
+}
+
+func (a *App) sendTelegramPersonAlert(ctx context.Context, cfg account.TelegramConfig, client *tg.Client, token string, chats []account.TelegramChat, cam store.Camera, recordingName string, offset float64, image []byte, caption string) {
+	if cfg.MediaMode != "video" && len(image) > 0 {
+		for _, chat := range chats {
+			a.sendTelegramPersonPhoto(ctx, client, token, chat, cam, recordingName, offset, image, caption)
+		}
+	}
+	if cfg.MediaMode == "video" || cfg.MediaMode == "photo_video" {
+		a.sendTelegramPersonVideoToChats(ctx, client, token, chats, cam, recordingName, offset, cfg.VideoSeconds, caption)
+	}
+}
 func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status media.RecordingStatus) {
 	if !event.Recording {
 		return
@@ -560,53 +799,42 @@ func (a *App) notifyTelegramEvent(cam store.Camera, event onvifsvc.Event, status
 		return
 	}
 	client := tg.New()
-	caption := "⚠️ Evento detectado · " + cam.Name
 	eventTime := event.Time
 	if eventTime.IsZero() {
 		eventTime = time.Now().UTC()
 	}
-	caption += "\n" + eventTime.Local().Format("02/01/2006 15:04:05")
-
-	if cfg.MediaMode == "video" {
-		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
-		if uriErr != nil {
-			return
-		}
-		path, clipErr := a.media.CaptureClip(ctx, streamURI, time.Duration(cfg.VideoSeconds)*time.Second)
-		if clipErr != nil {
-			return
-		}
-		defer os.Remove(path)
-		for _, chat := range chats {
-			if chat.Enabled {
-				_ = client.SendVideoFile(ctx, token, chat.ChatID, path, caption)
-			}
-		}
-		return
-	}
-
-	// Las alertas de foto sólo se envían con un frame que NanoDet haya
-	// clasificado realmente como persona. Así no se manda la primera imagen
-	// genérica del evento cuando el sujeto todavía no entró en cuadro.
+	genericCaption := "⚠️ Evento detectado · " + cam.Name + "\n" + eventTime.Local().Format("02/01/2006 15:04:05")
 	if a.analytics == nil || !a.analytics.Status().Ready {
+		if cfg.MediaMode == "video" {
+			a.sendTelegramLiveVideoToChats(ctx, client, token, chats, cam, cfg.VideoSeconds, genericCaption)
+		}
 		return
 	}
+
 	personCtx, personCancel := context.WithTimeout(ctx, 10*time.Second)
 	frame, found := a.analytics.WaitForPersonFrame(personCtx, cam.ID, eventTime.Add(-3*time.Second))
 	personCancel()
 	if !found {
+		if cfg.MediaMode == "video" {
+			a.sendTelegramLiveVideoToChats(ctx, client, token, chats, cam, cfg.VideoSeconds, genericCaption)
+		}
 		return
 	}
-	image, err := a.telegramPersonPhoto(ctx, cam, status, frame.DetectedAt)
-	if err != nil || len(image) == 0 {
-		return
-	}
-	caption += fmt.Sprintf("\nPersona · %.0f%%", frame.Confidence*100)
-	for _, chat := range chats {
-		if chat.Enabled {
-			_ = client.SendPhoto(ctx, token, chat.ChatID, image, caption)
+
+	status = a.ensureTelegramPersonRecording(cam, cfg)
+	recordingName, recordingOffset, _ := personRecordingSnapshotTarget(status, frame.DetectedAt)
+	caption := "⚠️ Persona detectada · " + cam.Name +
+		"\n" + frame.DetectedAt.Local().Format("02/01/2006 15:04:05") +
+		fmt.Sprintf("\nConfianza · %.0f%%", frame.Confidence*100)
+
+	var image []byte
+	if cfg.MediaMode != "video" {
+		image, err = a.telegramPersonPhoto(ctx, cam, status, frame.DetectedAt)
+		if err != nil || len(image) == 0 {
+			return
 		}
 	}
+	a.sendTelegramPersonAlert(ctx, cfg, client, token, chats, cam, recordingName, recordingOffset, image, caption)
 }
 
 func (a *App) notifyTelegramSmartEvent(cam store.Camera, event analytics.SmartEvent) {
@@ -640,25 +868,36 @@ func (a *App) notifyTelegramSmartEvent(cam store.Camera, event analytics.SmartEv
 		caption += "\nRegla: " + strings.Join(event.MatchedRuleNames, ", ")
 	}
 	client := tg.New()
-	if cfg.MediaMode == "video" {
-		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
-		if uriErr != nil {
-			return
+	if event.ClassName == "person" {
+		status := a.ensureTelegramPersonRecording(cam, cfg)
+		if status.Path != "" && !status.StartedAt.IsZero() {
+			event.RecordingName = filepath.Base(status.Path)
+			event.OffsetSecond = math.Max(0, when.Sub(status.StartedAt).Seconds())
 		}
-		seconds := cfg.VideoSeconds
-		if seconds < account.TelegramVideoMinSeconds || seconds > account.TelegramVideoMaxSeconds {
-			seconds = account.TelegramVideoDefaultSeconds
+		if event.Confidence > 0 {
+			caption += fmt.Sprintf("\nConfianza · %.0f%%", event.Confidence*100)
 		}
-		path, clipErr := a.media.CaptureClip(ctx, streamURI, time.Duration(seconds)*time.Second)
-		if clipErr != nil {
-			return
-		}
-		defer os.Remove(path)
-		for _, chat := range chats {
-			if chat.Enabled {
-				_ = client.SendVideoFile(ctx, token, chat.ChatID, path, caption)
+		var image []byte
+		if cfg.MediaMode != "video" {
+			if event.RecordingName != "" {
+				image, _ = a.media.RecordingSnapshot(ctx, cam.ID, event.RecordingName, math.Max(0, event.OffsetSecond))
+			}
+			if len(image) == 0 {
+				streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+				if uriErr != nil {
+					return
+				}
+				image, err = a.media.Snapshot(ctx, streamURI)
+				if err != nil {
+					return
+				}
 			}
 		}
+		a.sendTelegramPersonAlert(ctx, cfg, client, token, chats, cam, event.RecordingName, math.Max(0, event.OffsetSecond), image, caption)
+		return
+	}
+	if cfg.MediaMode == "video" {
+		a.sendTelegramLiveVideoToChats(ctx, client, token, chats, cam, cfg.VideoSeconds, caption)
 		return
 	}
 	var image []byte

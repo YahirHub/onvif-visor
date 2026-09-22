@@ -26,6 +26,16 @@ func normalizeTelegramClipDuration(duration time.Duration) time.Duration {
 	return duration
 }
 
+func normalizeRecordingClipDuration(duration time.Duration) time.Duration {
+	if duration < time.Second {
+		return time.Second
+	}
+	if duration > telegramClipMaxDuration {
+		return telegramClipMaxDuration
+	}
+	return duration
+}
+
 func (m *Manager) CaptureClip(ctx context.Context, streamURI string, duration time.Duration) (string, error) {
 	duration = normalizeTelegramClipDuration(duration)
 	file, err := os.CreateTemp("", "onvif-telegram-*.mp4")
@@ -94,6 +104,83 @@ func (m *Manager) CaptureClip(ctx context.Context, streamURI string, duration ti
 	if info.Size() < 1024 {
 		_ = os.Remove(path)
 		return "", errors.New("captured clip is empty or incomplete")
+	}
+	return path, nil
+}
+
+func (m *Manager) RecordingClip(ctx context.Context, cameraID, name string, startSeconds float64, duration time.Duration) (string, error) {
+	if startSeconds < 0 {
+		startSeconds = 0
+	}
+	duration = normalizeRecordingClipDuration(duration)
+	source, err := m.RecordingPath(cameraID, name)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Stat(source); statErr != nil || !info.Mode().IsRegular() {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "", ErrRecordingNotFound
+		}
+		if statErr != nil {
+			return "", statErr
+		}
+		return "", ErrRecordingNotFound
+	}
+
+	file, err := os.CreateTemp("", "onvif-telegram-person-*.mp4")
+	if err != nil {
+		return "", fmt.Errorf("create recording clip temp file: %w", err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+
+	clipCtx, cancel := context.WithTimeout(ctx, duration+20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(clipCtx, m.ffmpeg,
+		"-hide_banner", "-loglevel", "error",
+		"-ss", fmt.Sprintf("%.3f", startSeconds),
+		"-fflags", "+genpts+discardcorrupt",
+		"-i", source,
+		"-map", "0:v:0",
+		"-t", fmt.Sprintf("%.3f", duration.Seconds()),
+		"-an",
+		"-vf", "fps=12,scale=1280:-2:force_original_aspect_ratio=decrease,format=yuv420p",
+		"-fps_mode", "cfr",
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "23",
+		"-maxrate", "1800k",
+		"-bufsize", "3600k",
+		"-g", "24",
+		"-keyint_min", "24",
+		"-sc_threshold", "0",
+		"-pix_fmt", "yuv420p",
+		"-threads", "2",
+		"-avoid_negative_ts", "make_zero",
+		"-movflags", "+faststart",
+		"-f", "mp4",
+		"-y", path,
+	)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		_ = os.Remove(path)
+		if clipCtx.Err() != nil {
+			return "", fmt.Errorf("recording clip timeout: %w", clipCtx.Err())
+		}
+		return "", fmt.Errorf("recording clip: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if info.Size() < 1024 {
+		_ = os.Remove(path)
+		return "", errors.New("recording clip is empty or incomplete")
 	}
 	return path, nil
 }

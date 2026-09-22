@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+func TestNormalizeRecordingClipDuration(t *testing.T) {
+	tests := []struct {
+		input time.Duration
+		want  time.Duration
+	}{
+		{input: 200 * time.Millisecond, want: time.Second},
+		{input: 8 * time.Second, want: 8 * time.Second},
+		{input: 90 * time.Second, want: 60 * time.Second},
+	}
+	for _, tt := range tests {
+		if got := normalizeRecordingClipDuration(tt.input); got != tt.want {
+			t.Fatalf("normalizeRecordingClipDuration(%s) = %s, want %s", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestNormalizeTelegramClipDuration(t *testing.T) {
 	tests := []struct {
 		input time.Duration

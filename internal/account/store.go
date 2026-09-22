@@ -148,6 +148,17 @@ CREATE TABLE IF NOT EXISTS telegram_codes (
 	expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_telegram_codes_expiry ON telegram_codes(expires_at);
+CREATE TABLE IF NOT EXISTS telegram_media_actions (
+	id TEXT PRIMARY KEY,
+	chat_id INTEGER NOT NULL REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
+	camera_id TEXT NOT NULL,
+	recording_name TEXT NOT NULL,
+	offset_seconds REAL NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_media_actions_expiry
+	ON telegram_media_actions(expires_at);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate account database: %w", err)

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -14,6 +15,7 @@ import (
 
 const (
 	TelegramCodeDuration        = 10 * time.Minute
+	TelegramMediaActionDuration = 7 * 24 * time.Hour
 	TelegramVideoMinSeconds     = 3
 	TelegramVideoMaxSeconds     = 60
 	TelegramVideoDefaultSeconds = 5
@@ -38,6 +40,20 @@ type TelegramChat struct {
 	LinkedAt time.Time `json:"linked_at"`
 }
 
+type TelegramMediaAction struct {
+	ID            string
+	ChatID        int64
+	CameraID      string
+	RecordingName string
+	OffsetSecond  float64
+	CreatedAt     time.Time
+	ExpiresAt     time.Time
+}
+
+func validTelegramMediaMode(mode string) bool {
+	return mode == "photo" || mode == "video" || mode == "photo_video"
+}
+
 func (s *Store) GetTelegramConfig(ctx context.Context) (TelegramConfig, bool, error) {
 	var cfg TelegramConfig
 	var enabled int
@@ -58,7 +74,7 @@ FROM telegram_config WHERE id = 1
 }
 
 func (s *Store) SaveTelegramConfig(ctx context.Context, cfg TelegramConfig) error {
-	if cfg.MediaMode != "photo" && cfg.MediaMode != "video" {
+	if !validTelegramMediaMode(cfg.MediaMode) {
 		return errors.New("invalid telegram media mode")
 	}
 	if cfg.VideoSeconds < TelegramVideoMinSeconds || cfg.VideoSeconds > TelegramVideoMaxSeconds {
@@ -88,7 +104,7 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 func (s *Store) UpdateTelegramSettings(ctx context.Context, notifications bool, mediaMode string, videoSeconds int) error {
-	if mediaMode != "photo" && mediaMode != "video" {
+	if !validTelegramMediaMode(mediaMode) {
 		return errors.New("invalid telegram media mode")
 	}
 	if videoSeconds < TelegramVideoMinSeconds || videoSeconds > TelegramVideoMaxSeconds {
@@ -118,6 +134,9 @@ func (s *Store) DeleteTelegramConfig(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, "DELETE FROM telegram_codes"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM telegram_media_actions"); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM telegram_chats"); err != nil {
@@ -172,6 +191,62 @@ ON CONFLICT(chat_id) DO UPDATE SET user_id=excluded.user_id, chat_name=excluded.
 	return nil
 }
 
+func (s *Store) CreateTelegramMediaAction(ctx context.Context, chatID int64, cameraID, recordingName string, offsetSecond float64) (TelegramMediaAction, error) {
+	cameraID = strings.TrimSpace(cameraID)
+	recordingName = strings.TrimSpace(recordingName)
+	if chatID == 0 || cameraID == "" || recordingName == "" {
+		return TelegramMediaAction{}, errors.New("invalid telegram media action")
+	}
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return TelegramMediaAction{}, err
+	}
+	now := time.Now().UTC()
+	action := TelegramMediaAction{
+		ID:            hex.EncodeToString(raw),
+		ChatID:        chatID,
+		CameraID:      cameraID,
+		RecordingName: recordingName,
+		OffsetSecond:  offsetSecond,
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(TelegramMediaActionDuration),
+	}
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM telegram_media_actions WHERE expires_at <= ?", now.Unix()); err != nil {
+		return TelegramMediaAction{}, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO telegram_media_actions(id, chat_id, camera_id, recording_name, offset_seconds, created_at, expires_at)
+VALUES(?,?,?,?,?,?,?)`,
+		action.ID, action.ChatID, action.CameraID, action.RecordingName, action.OffsetSecond,
+		action.CreatedAt.Unix(), action.ExpiresAt.Unix()); err != nil {
+		return TelegramMediaAction{}, fmt.Errorf("create telegram media action: %w", err)
+	}
+	return action, nil
+}
+
+func (s *Store) GetTelegramMediaAction(ctx context.Context, id string, chatID int64) (TelegramMediaAction, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" || chatID == 0 {
+		return TelegramMediaAction{}, false, nil
+	}
+	var action TelegramMediaAction
+	var created, expires int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, chat_id, camera_id, recording_name, offset_seconds, created_at, expires_at
+FROM telegram_media_actions
+WHERE id=? AND chat_id=? AND expires_at>?`,
+		id, chatID, time.Now().UTC().Unix(),
+	).Scan(&action.ID, &action.ChatID, &action.CameraID, &action.RecordingName, &action.OffsetSecond, &created, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TelegramMediaAction{}, false, nil
+	}
+	if err != nil {
+		return TelegramMediaAction{}, false, fmt.Errorf("get telegram media action: %w", err)
+	}
+	action.CreatedAt = time.Unix(created, 0).UTC()
+	action.ExpiresAt = time.Unix(expires, 0).UTC()
+	return action, true, nil
+}
 func (s *Store) CreateTelegramCode(ctx context.Context, userID int64) (string, time.Time, error) {
 	var random [2]byte
 	if _, err := rand.Read(random[:]); err != nil {

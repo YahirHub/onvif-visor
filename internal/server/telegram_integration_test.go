@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"onvif-visor/internal/account"
 	"onvif-visor/internal/media"
 )
 
@@ -64,6 +65,15 @@ func TestValidFourDigitCode(t *testing.T) {
 		if validFourDigitCode(invalid) {
 			t.Fatalf("expected invalid code %q", invalid)
 		}
+	}
+}
+
+func TestTelegramPersonRecordWindowUsesConfiguredMaximum(t *testing.T) {
+	if got := telegramPersonRecordWindow(account.TelegramConfig{VideoSeconds: 12}); got != 20*time.Second {
+		t.Fatalf("telegramPersonRecordWindow(12s) = %s, want 20s", got)
+	}
+	if got := telegramPersonRecordWindow(account.TelegramConfig{VideoSeconds: 99}); got != 13*time.Second {
+		t.Fatalf("telegramPersonRecordWindow(invalid) = %s, want 13s", got)
 	}
 }
 

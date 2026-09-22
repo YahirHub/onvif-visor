@@ -61,6 +61,27 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .icon-button:hover { background: rgba(255,255,255,.06); color: #fff; }
 
+[data-lucide] { font-style: normal; }
+.lucide {
+  width: 1em;
+  height: 1em;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon-button .lucide { width: 15px; height: 15px; }
+.button .lucide { display: inline-block; width: 14px; height: 14px; margin-right: .28rem; vertical-align: -.14em; }
+.button.icon-only-button { width: 32px; min-width: 32px; height: 32px; padding: 0; }
+.button.icon-only-button .lucide { margin-right: 0; }
+.empty-icon .lucide { width: 1.55rem; height: 1.55rem; margin: 0 auto; }
+.session-device-icon .lucide { width: 18px; height: 18px; }
+.integration-logo .lucide { width: 19px; height: 19px; }
+.event-jump { display: inline-flex; align-items: center; gap: .22rem; }
+.event-jump .lucide { width: 11px; height: 11px; }
+
 input {
   width: 100%;
   min-width: 0;
@@ -486,7 +507,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 .recording-preview-fallback span { font-size: 1.2rem; }
 .recording-card-play { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; background: rgba(0,0,0,.18); transition: opacity .14s ease; }
 .recording-card:hover .recording-card-play { opacity: 1; }
-.recording-card-play i { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: rgba(3,5,7,.72); color: #fff; font-size: .8rem; font-style: normal; }
+.recording-card-play .lucide { width: 36px; height: 36px; padding: 10px; border-radius: 50%; background: rgba(3,5,7,.72); color: #fff; }
 .recording-card-body { padding: .52rem .58rem .6rem; }
 .recording-card-title { margin-bottom: .2rem; font-size: .68rem; }
 .recording-card-meta { display: flex; justify-content: space-between; gap: .45rem; color: #72808e; font-size: .57rem; }

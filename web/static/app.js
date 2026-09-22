@@ -39,6 +39,22 @@ const state = {
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+let iconRefreshFrame = null;
+
+function iconMarkup(name, fallback = '') {
+  return `<i data-lucide="${name}" aria-hidden="true">${fallback}</i>`;
+}
+
+function refreshIcons() {
+  if (!window.lucide?.createIcons || iconRefreshFrame !== null) return;
+  iconRefreshFrame = requestAnimationFrame(() => {
+    iconRefreshFrame = null;
+    try {
+      window.lucide.createIcons();
+    } catch (_) {}
+  });
+}
+
 const bootView = $('#bootView');
 const bootStatus = $('#bootStatus');
 const bootSpinner = $('#bootSpinner');
@@ -635,8 +651,9 @@ function renderCameras() {
   if (!cameras.length && query) {
     const noResults = document.createElement('div');
     noResults.className = 'empty-state';
-    noResults.innerHTML = '<div class="empty-icon" aria-hidden="true">⌕</div><h2>Sin resultados</h2><p>Prueba con otro nombre, modelo o endpoint.</p>';
+    noResults.innerHTML = '<div class="empty-icon" aria-hidden="true">' + iconMarkup('search-x', '⌕') + '</div><h2>Sin resultados</h2><p>Prueba con otro nombre, modelo o endpoint.</p>';
     cameraGrid.append(noResults);
+    refreshIcons();
     return;
   }
 
@@ -703,6 +720,7 @@ function renderCameras() {
 
     cameraGrid.append(fragment);
   }
+  refreshIcons();
 }
 
 
@@ -971,9 +989,10 @@ function syncFullscreenUI() {
   const active = Boolean(document.fullscreenElement) || appView.classList.contains('theater-mode');
   const button = $('#monitorFullscreenBtn');
   if (button) {
-    button.textContent = active ? '⛶' : '⛶';
+    button.innerHTML = iconMarkup(active ? 'minimize-2' : 'maximize-2', '⛶');
     button.title = active ? 'Salir de pantalla completa' : 'Pantalla completa';
     button.setAttribute('aria-label', button.title);
+    refreshIcons();
   }
   requestAnimationFrame(fitMonitorStage);
 }
@@ -1050,6 +1069,7 @@ function renderMonitor() {
   }
 
   renderPicker();
+  refreshIcons();
   requestAnimationFrame(fitMonitorStage);
 }
 
@@ -2034,8 +2054,9 @@ function renderRecordingCards(recordings) {
   if (!recordings.length) {
     const empty = document.createElement('div');
     empty.className = 'placeholder-panel';
-    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◫</div><h2>Sin archivos en esta fecha</h2><p>Elige otra fecha o espera a que la cámara genere nuevas grabaciones.</p>';
+    empty.innerHTML = '<div class="empty-icon" aria-hidden="true">' + iconMarkup('video-off', '◫') + '</div><h2>Sin archivos en esta fecha</h2><p>Elige otra fecha o espera a que la cámara genere nuevas grabaciones.</p>';
     list.append(empty);
+    refreshIcons();
     return;
   }
 
@@ -2057,9 +2078,9 @@ function renderRecordingCards(recordings) {
     image.src = recordingSnapshotURL(recording, objectSegment?.peak_seconds);
     fallback.className = 'recording-preview-fallback';
     fallback.hidden = true;
-    fallback.innerHTML = '<span aria-hidden="true">◫</span><strong>Sin miniatura</strong>';
+    fallback.innerHTML = '<span aria-hidden="true">' + iconMarkup('video-off', '◫') + '</span><strong>Sin miniatura</strong>';
     play.className = 'recording-card-play';
-    play.innerHTML = '<i aria-hidden="true">▶</i>';
+    play.innerHTML = iconMarkup('play', '▶');
     let thumbnailFallbackTried = false;
     image.addEventListener('load', () => preview.classList.remove('loading'));
     image.addEventListener('error', () => {
@@ -2124,6 +2145,7 @@ function renderRecordingCards(recordings) {
     card.append(preview, body);
     list.append(card);
   }
+  refreshIcons();
 }
 
 function recordingPaginationPages(page, totalPages) {
@@ -2591,7 +2613,7 @@ function createEventCard(event) {
     const jumpOffset = Number(event.object_confidence) > 0
       ? event.object_offset
       : (Number(event.person_confidence) > 0 ? event.person_offset : event.recording_offset);
-    action.textContent = `▶ ${formatClock(jumpOffset || 0)}`;
+    action.innerHTML = iconMarkup('play', '▶') + '<span>' + formatClock(jumpOffset || 0) + '</span>';
     side.append(action);
   }
   if (event.recording_trigger) {
@@ -2614,9 +2636,10 @@ function renderEvents(events) {
       list.replaceChildren();
       const empty = document.createElement('div');
       empty.className = 'placeholder-panel';
-      empty.innerHTML = '<div class="empty-icon" aria-hidden="true">◉</div><h2>Sin eventos recientes</h2><p>El visor mostrará aquí el movimiento detectado por ONVIF o por el detector de respaldo.</p>';
+      empty.innerHTML = '<div class="empty-icon" aria-hidden="true">' + iconMarkup('activity', '◉') + '</div><h2>Sin eventos recientes</h2><p>El visor mostrará aquí el movimiento detectado por ONVIF o por el detector de respaldo.</p>';
       list.append(empty);
     }
+    refreshIcons();
     return;
   }
 
@@ -2645,6 +2668,7 @@ function renderEvents(events) {
     const current = list.children[index];
     if (current !== card) list.insertBefore(card, current || null);
   });
+  refreshIcons();
 }
 
 function describeSessionDevice(userAgent) {
@@ -2697,7 +2721,9 @@ function renderSessions() {
     card.className = `session-card${session.current ? ' current' : ''}`;
     const icon = document.createElement('span');
     icon.className = 'session-device-icon';
-    icon.textContent = /Android|iPhone|iPad/i.test(session.user_agent || '') ? '▯' : '▰';
+    icon.innerHTML = /Android|iPhone|iPad/i.test(session.user_agent || '')
+      ? iconMarkup('smartphone', '▯')
+      : iconMarkup('monitor', '▰');
     const details = document.createElement('div');
     details.className = 'session-details';
     const title = document.createElement('div');
@@ -2737,6 +2763,7 @@ function renderSessions() {
     }
     list.append(card);
   }
+  refreshIcons();
 }
 
 async function closeOtherSessions() {
@@ -2922,8 +2949,8 @@ function renderTelegramChats(chats) {
 }
 
 function syncTelegramMediaFields() {
-  // El medio sólo afecta a las alertas automáticas. La duración también se usa
-  // como valor por defecto de /video, por lo que debe seguir editable en foto.
+  // La duración limita los clips automáticos/de "Ver video" y sigue siendo
+  // el valor por defecto de /video, por lo que siempre debe poder editarse.
   $('#telegramVideoSeconds').disabled = false;
 }
 
@@ -3151,8 +3178,9 @@ function renderAnalyticsGeometryLists() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'icon-button';
-    remove.textContent = '×';
+    remove.innerHTML = iconMarkup('x', '×');
     remove.title = `Eliminar ${type === 'zone' ? 'zona' : 'línea'}`;
+    remove.setAttribute('aria-label', remove.title);
     remove.addEventListener('click', () => {
       const collection = type === 'zone' ? state.analyticsConfig.zones : state.analyticsConfig.lines;
       const removedID = collection[index]?.id;
@@ -3177,6 +3205,7 @@ function renderAnalyticsGeometryLists() {
   if (!state.analyticsConfig.lines?.length) {
     const empty = document.createElement('span'); empty.className = 'hint'; empty.textContent = 'Sin líneas'; lineList.append(empty);
   }
+  refreshIcons();
 }
 
 function svgPoint(point) {
@@ -3390,7 +3419,7 @@ function renderAnalyticsRules() {
     copy.append(strong, small);
     copy.addEventListener('click', () => editAnalyticsRule(index));
     const remove = document.createElement('button');
-    remove.type = 'button'; remove.className = 'icon-button'; remove.textContent = '×'; remove.title = 'Eliminar regla';
+    remove.type = 'button'; remove.className = 'icon-button'; remove.innerHTML = iconMarkup('x', '×'); remove.title = 'Eliminar regla'; remove.setAttribute('aria-label', remove.title);
     remove.addEventListener('click', () => { rules.splice(index, 1); renderAnalyticsRules(); resetAnalyticsRuleEditor(); });
     row.append(enabled, copy, remove);
     list.append(row);
@@ -3398,6 +3427,7 @@ function renderAnalyticsRules() {
   if (!rules.length) {
     const empty = document.createElement('p'); empty.className = 'hint analytics-inline-empty'; empty.textContent = 'Sin reglas configuradas.'; list.append(empty);
   }
+  refreshIcons();
 }
 
 function saveAnalyticsRuleDraft() {
@@ -3800,4 +3830,5 @@ window.addEventListener('beforeunload', () => {
   stopRecordingPlayback();
 });
 
+refreshIcons();
 bootstrap();

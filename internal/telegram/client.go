@@ -46,9 +46,21 @@ type Message struct {
 	Text      string `json:"text"`
 }
 
+type User struct {
+	ID int64 `json:"id"`
+}
+
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    User     `json:"from"`
+	Message *Message `json:"message"`
+	Data    string   `json:"data"`
+}
+
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
 }
 
 type apiResponse[T any] struct {
@@ -86,7 +98,7 @@ func (c *Client) GetUpdates(ctx context.Context, token string, offset int64) ([]
 	values := url.Values{}
 	values.Set("offset", strconv.FormatInt(offset, 10))
 	values.Set("timeout", "25")
-	values.Set("allowed_updates", `["message"]`)
+	values.Set("allowed_updates", `["message","callback_query"]`)
 	var result []Update
 	if err := c.callForm(ctx, token, "getUpdates", values, &result); err != nil {
 		return nil, err
@@ -107,6 +119,38 @@ func (c *Client) SendPhoto(ctx context.Context, token string, chatID int64, imag
 		return errors.New("empty telegram photo")
 	}
 	return c.sendMultipart(ctx, token, "sendPhoto", chatID, "photo", "event.jpg", "image/jpeg", image, caption)
+}
+
+func (c *Client) SendPhotoWithCallbackButton(ctx context.Context, token string, chatID int64, image []byte, caption, buttonText, callbackData string) error {
+	if len(image) == 0 {
+		return errors.New("empty telegram photo")
+	}
+	if strings.TrimSpace(buttonText) == "" || strings.TrimSpace(callbackData) == "" {
+		return errors.New("telegram callback button requires text and data")
+	}
+	markup, err := json.Marshal(map[string]any{
+		"inline_keyboard": [][]map[string]string{{
+			{"text": buttonText, "callback_data": callbackData},
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	return c.sendMultipartWithMarkup(ctx, token, "sendPhoto", chatID, "photo", "event.jpg", "image/jpeg", image, caption, string(markup))
+}
+
+func (c *Client) AnswerCallbackQuery(ctx context.Context, token, callbackID, text string) error {
+	callbackID = strings.TrimSpace(callbackID)
+	if callbackID == "" {
+		return errors.New("telegram callback id is required")
+	}
+	values := url.Values{}
+	values.Set("callback_query_id", callbackID)
+	if strings.TrimSpace(text) != "" {
+		values.Set("text", text)
+	}
+	var ignored json.RawMessage
+	return c.callForm(ctx, token, "answerCallbackQuery", values, &ignored)
 }
 
 func (c *Client) SendVideoFile(ctx context.Context, token string, chatID int64, path, caption string) error {
@@ -141,6 +185,10 @@ func (c *Client) callForm(ctx context.Context, token, method string, values url.
 }
 
 func (c *Client) sendMultipart(ctx context.Context, token, method string, chatID int64, field, filename, contentType string, data []byte, caption string) error {
+	return c.sendMultipartWithMarkup(ctx, token, method, chatID, field, filename, contentType, data, caption, "")
+}
+
+func (c *Client) sendMultipartWithMarkup(ctx context.Context, token, method string, chatID int64, field, filename, contentType string, data []byte, caption, replyMarkup string) error {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
@@ -148,6 +196,11 @@ func (c *Client) sendMultipart(ctx context.Context, token, method string, chatID
 	}
 	if caption != "" {
 		if err := writer.WriteField("caption", caption); err != nil {
+			return err
+		}
+	}
+	if replyMarkup != "" {
+		if err := writer.WriteField("reply_markup", replyMarkup); err != nil {
 			return err
 		}
 	}
