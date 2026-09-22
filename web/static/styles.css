@@ -1198,3 +1198,59 @@ dialog.analytics-dialog { width: min(96vw, 1180px); max-height: 92vh; }
     flex: 1 1 auto;
   }
 }
+
+
+/* Configuración central por cámara */
+.camera-settings-page { width: min(100%, 1180px); margin: 0 auto; display: grid; gap: .8rem; }
+.camera-settings-toolbar { min-height: 58px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: .7rem; align-items: center; }
+.camera-settings-heading { min-width: 0; }
+.camera-settings-heading .eyebrow { margin-bottom: .04rem; }
+.camera-settings-heading h2 { margin: 0; font-size: 1rem; }
+.camera-settings-heading .subtitle { margin: .08rem 0 0; color: #718091; font-size: .62rem; }
+.camera-settings-toolbar-actions { display: flex; gap: .35rem; }
+.camera-settings-form { display: grid; gap: .7rem; }
+.camera-settings-panel { min-width: 0; display: grid; align-content: start; gap: .65rem; padding: .75rem; border: 1px solid rgba(148,163,184,.08); border-radius: 10px; background: #0b1015; }
+.camera-settings-overview { grid-template-columns: minmax(220px, 360px) minmax(0,1fr); align-items: center; }
+.camera-settings-preview { overflow: hidden; aspect-ratio: 16/9; border-radius: 8px; background: #030506; }
+.camera-settings-preview img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.camera-settings-overview-copy { min-width: 0; display: grid; gap: .22rem; }
+.camera-settings-overview-copy strong { font-size: .82rem; }
+.camera-settings-overview-copy .mono { overflow: hidden; color: #738190; font-size: .58rem; text-overflow: ellipsis; white-space: nowrap; }
+.camera-settings-overview-copy p, .camera-settings-copy { margin: .15rem 0 0; color: #72808e; font-size: .61rem; line-height: 1.55; }
+.camera-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .7rem; align-items: stretch; }
+.camera-settings-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
+.camera-settings-section-head .eyebrow { margin-bottom: .06rem; }
+.camera-settings-section-head h3 { margin: 0; font-size: .79rem; }
+.camera-settings-section-head > strong { color: var(--accent); font-size: .7rem; white-space: nowrap; }
+.settings-switch { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: .55rem; align-items: start; padding: .58rem .62rem; border: 1px solid rgba(148,163,184,.08); border-radius: 8px; background: #10161c; cursor: pointer; }
+.settings-switch input { width: 16px; height: 16px; margin: .08rem 0 0; accent-color: var(--accent); }
+.settings-switch > span { min-width: 0; display: grid; gap: .12rem; }
+.settings-switch strong { font-size: .64rem; }
+.settings-switch small { color: #697786; font-size: .54rem; line-height: 1.45; }
+.compact-settings-field small { color: #647383; font-size: .52rem; line-height: 1.45; }
+.camera-settings-schedule { display: grid; gap: .55rem; }
+.percent-field { display: grid; grid-template-columns: minmax(80px, 110px) auto; gap: .45rem; align-items: center; }
+.percent-field span { color: #718091; font-size: .59rem; }
+.storage-meter { width: 100%; height: 9px; overflow: hidden; border-radius: 999px; background: #151c23; }
+.storage-meter > span { width: 0; height: 100%; display: block; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+.storage-meter > span.warning { background: #d9a441; }
+.storage-meter > span.danger { background: #d4565d; }
+.camera-settings-savebar { position: sticky; bottom: .5rem; z-index: 5; display: flex; align-items: center; justify-content: flex-end; gap: .7rem; padding: .58rem .65rem; border: 1px solid rgba(148,163,184,.1); border-radius: 9px; background: rgba(8,12,16,.95); backdrop-filter: blur(10px); }
+.camera-settings-savebar .form-message { margin-right: auto; }
+.camera-settings-savebar .button { min-width: 150px; }
+
+@media (max-width: 900px) {
+  .camera-settings-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .camera-settings-toolbar { grid-template-columns: auto minmax(0,1fr); align-items: start; }
+  .camera-settings-toolbar-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .camera-settings-overview { grid-template-columns: 1fr; }
+  .camera-settings-preview { max-width: 520px; }
+}
+@media (max-width: 480px) {
+  .camera-settings-toolbar-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .camera-settings-panel { padding: .65rem; }
+  .camera-settings-savebar { align-items: stretch; flex-direction: column; }
+  .camera-settings-savebar .button { width: 100%; }
+}

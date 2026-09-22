@@ -16,6 +16,7 @@ const state = {
   analyticsLoading: false,
   auth: { required: false, authenticated: false },
   currentView: 'cameras',
+  cameraSettingsID: '',
   monitorSelected: [],
   recordingCameraID: '',
   recordingDate: '',
@@ -73,6 +74,7 @@ const pickerSearch = $('#pickerSearch');
 
 const viewMeta = {
   cameras: { eyebrow: 'MONITOREO', title: 'Cámaras', subtitle: 'Selecciona una cámara para abrirla.' },
+  cameraSettings: { eyebrow: 'CÁMARA', title: 'Configuración', subtitle: 'Grabación, analítica y almacenamiento.' },
   monitor: { eyebrow: 'MONITOREO', title: 'Multivista', subtitle: 'Vista en vivo.' },
   recordings: { eyebrow: 'ARCHIVO', title: 'Grabaciones', subtitle: 'Historial de vídeo por cámara.' },
   playback: { eyebrow: 'ARCHIVO', title: 'Reproducción', subtitle: 'Reproductor de grabación.' },
@@ -130,6 +132,13 @@ function parseCurrentRoute() {
   if (path === '/perfil') return { view: 'profile' };
   if (path === '/integraciones') return { view: 'integrations' };
 
+  if (path.startsWith('/camaras/')) {
+    const parts = path.slice('/camaras/'.length).split('/').filter(Boolean);
+    if (parts.length === 2 && parts[1] === 'configuracion') {
+      const cameraSettingsID = decodeRoutePart(parts[0]);
+      if (cameraSettingsID) return { view: 'cameraSettings', cameraSettingsID };
+    }
+  }
   if (path.startsWith('/camara/')) {
     const cameraID = path.slice('/camara/'.length);
     if (cameraID && !cameraID.includes('/')) return { view: 'monitor', cameraID: decodeRoutePart(cameraID) };
@@ -180,6 +189,13 @@ function applyCurrentRoute() {
       return;
     }
     state.monitorSelected = [route.cameraID];
+  }
+  if (route.cameraSettingsID) {
+    if (!state.cameras.some(camera => camera.id === route.cameraSettingsID)) {
+      navigate('cameras', { replace: true });
+      return;
+    }
+    state.cameraSettingsID = route.cameraSettingsID;
   }
   if (route.clearRecordingCamera) {
     state.recordingCameraID = '';
@@ -377,7 +393,7 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   state.currentView = view;
   appView.dataset.view = view;
 
-  const activeNavView = view === 'playback' ? 'recordings' : view;
+  const activeNavView = view === 'playback' ? 'recordings' : view === 'cameraSettings' ? 'cameras' : view;
   for (const item of $$('.nav-item[data-view]')) item.classList.toggle('active', item.dataset.view === activeNavView);
   for (const section of $$('.app-view')) section.hidden = section.id !== `${view}View`;
 
@@ -394,6 +410,7 @@ function navigate(view, { path = '', replace = false, fromHistory = false } = {}
   }
 
   if (view === 'cameras') renderCameras();
+  if (view === 'cameraSettings') loadCameraSettingsView();
   if (view === 'monitor') {
     if (!state.monitorSelected.length && state.cameras.length) state.monitorSelected = [state.cameras[0].id];
     renderMonitor();
@@ -554,6 +571,10 @@ function cameraFingerprint(cameras) {
     model: camera.model,
     endpoint: camera.endpoint,
     event_recording: camera.event_recording,
+    person_recording: camera.person_recording,
+    post_roll_seconds: camera.post_roll_seconds,
+    auto_retention: camera.auto_retention,
+    retention_disk_percent: camera.retention_disk_percent,
     schedule_enabled: camera.schedule_enabled,
     schedule_days: camera.schedule_days,
     schedule_start: camera.schedule_start,
@@ -620,23 +641,12 @@ function renderCameras() {
     const fallback = $('.camera-thumb-fallback', card);
     const statusChip = $('.live-chip', card);
     const statusText = $('.camera-status-text', card);
-    const analyticsButton = $('.camera-analytics', card);
-    const scheduleButton = $('.camera-schedule', card);
+    const settingsButton = $('.camera-settings', card);
     const deleteButton = $('.camera-delete', card);
-    const toggle = $('.record-toggle', card);
 
     $('.camera-card-name', card).textContent = camera.name;
     $('.camera-card-meta', card).textContent = [camera.manufacturer, camera.model]
       .filter(Boolean).join(' · ') || 'Cámara ONVIF';
-    toggle.checked = Boolean(camera.event_recording);
-    const recordingMode = cameraScheduleMode(camera);
-    scheduleButton.classList.toggle('active', recordingMode !== 'off');
-    scheduleButton.textContent = recordingMode === 'continuous' ? '24' : '◷';
-    scheduleButton.title = recordingMode === 'continuous'
-      ? 'Grabación continua 24/7 · editar'
-      : recordingMode === 'schedule' ? 'Horario de grabación activo · editar' : 'Configurar grabación';
-    scheduleButton.setAttribute('aria-label', scheduleButton.title);
-
     image.alt = `Vista previa de ${camera.name}`;
     image.addEventListener('load', () => {
       card.classList.remove('loading');
@@ -656,26 +666,9 @@ function renderCameras() {
 
     mediaButton.addEventListener('click', () => openMonitor(camera.id));
 
-    toggle.addEventListener('change', async () => {
-      const wanted = toggle.checked;
-      toggle.disabled = true;
-      try {
-        await api(`/api/cameras/${encodeURIComponent(camera.id)}/recording`, {
-          method: 'PUT',
-          body: JSON.stringify({ enabled: wanted, post_roll_seconds: camera.post_roll_seconds || 20 }),
-        });
-        camera.event_recording = wanted;
-        setStatus(wanted ? `Grabación por eventos activada en ${camera.name}` : `Grabación por eventos desactivada en ${camera.name}`, true);
-      } catch (error) {
-        toggle.checked = !wanted;
-        if (!(error instanceof SessionRequiredError)) setStatus(error.message, false);
-      } finally {
-        toggle.disabled = false;
-      }
-    });
-
-    analyticsButton.addEventListener('click', () => openAnalyticsDialog(camera));
-    scheduleButton.addEventListener('click', () => openScheduleDialog(camera));
+    settingsButton.addEventListener('click', () => navigate('cameraSettings', {
+      path: '/camaras/' + encodeURIComponent(camera.id) + '/configuracion',
+    }));
 
     deleteButton.addEventListener('click', async () => {
       const accepted = await confirmAction({
@@ -697,6 +690,171 @@ function renderCameras() {
     });
 
     cameraGrid.append(fragment);
+  }
+}
+
+
+function syncCameraSettingsMode() {
+  const mode = $('#cameraSettingsMode').value;
+  const scheduled = mode === 'schedule';
+  $('#cameraSettingsScheduleWrap').hidden = !scheduled;
+  $('#cameraSettingsContinuousNote').hidden = mode !== 'continuous';
+  $('#cameraSettingsStart').disabled = !scheduled;
+  $('#cameraSettingsEnd').disabled = !scheduled;
+  for (const input of $$('#cameraSettingsDays input[type="checkbox"]')) input.disabled = !scheduled;
+}
+
+function syncCameraRetentionFields() {
+  const enabled = $('#cameraSettingsAutoRetention').checked;
+  const input = $('#cameraSettingsRetentionPercent');
+  input.disabled = !enabled;
+  const threshold = Math.max(70, Math.min(95, Number(input.value) || 90));
+  const target = Math.max(50, threshold - 5);
+  $('#cameraSettingsRetentionHelp').textContent = enabled
+    ? 'Al llegar a ' + threshold + '% se eliminan primero los archivos más antiguos de esta cámara hasta recuperar aproximadamente ' + target + '% de uso.'
+    : 'La limpieza automática está desactivada para esta cámara.';
+}
+
+function renderCameraSettingsStorage(storage) {
+  const used = Math.max(0, Math.min(100, Number(storage?.disk_used_percent) || 0));
+  const total = Math.max(0, Number(storage?.disk_total_bytes) || 0);
+  const available = Math.max(0, Number(storage?.disk_available_bytes) || 0);
+  $('#cameraSettingsDiskUsage').textContent = total > 0 ? used.toFixed(1) + '% usado' : 'No disponible';
+  $('#cameraSettingsDiskBar').style.width = used.toFixed(1) + '%';
+  $('#cameraSettingsDiskBar').classList.toggle('warning', used >= 80);
+  $('#cameraSettingsDiskBar').classList.toggle('danger', used >= 90);
+  $('#cameraSettingsDiskMeta').textContent = total > 0
+    ? formatBytes(available) + ' libres de ' + formatBytes(total) + ' · ' + formatBytes(Number(storage?.total_bytes) || 0) + ' en grabaciones'
+    : 'No se pudo consultar la capacidad del disco.';
+}
+
+async function loadCameraSettingsView() {
+  const camera = state.cameras.find(item => item.id === state.cameraSettingsID);
+  if (!camera) {
+    navigate('cameras', { replace: true });
+    return;
+  }
+
+  $('#cameraSettingsID').value = camera.id;
+  $('#cameraSettingsTitle').textContent = camera.name;
+  $('#cameraSettingsDeviceName').textContent = [camera.manufacturer, camera.model].filter(Boolean).join(' · ') || camera.name;
+  $('#cameraSettingsEndpoint').textContent = camera.endpoint || '';
+  $('#cameraSettingsMeta').textContent = [camera.profile_name, camera.events_supported ? 'Eventos ONVIF' : 'Sin eventos ONVIF'].filter(Boolean).join(' · ');
+  $('#cameraSettingsSnapshot').src = '/api/cameras/' + encodeURIComponent(camera.id) + '/snapshot?v=' + Date.now();
+  $('#cameraSettingsEventRecording').checked = Boolean(camera.event_recording);
+  $('#cameraSettingsPersonRecording').checked = Boolean(camera.person_recording);
+  $('#cameraSettingsPostRoll').value = String(Math.max(1, Number(camera.post_roll_seconds) || 20));
+  $('#cameraSettingsMode').value = cameraScheduleMode(camera);
+  $('#cameraSettingsStart').value = camera.schedule_start || '00:00';
+  $('#cameraSettingsEnd').value = camera.schedule_end || '23:59';
+  const configuredDays = Array.isArray(camera.schedule_days) && camera.schedule_days.length
+    ? new Set(camera.schedule_days.map(Number))
+    : new Set([0, 1, 2, 3, 4, 5, 6]);
+  for (const input of $$('#cameraSettingsDays input[type="checkbox"]')) {
+    input.checked = configuredDays.has(Number(input.value));
+  }
+  $('#cameraSettingsAutoRetention').checked = camera.auto_retention !== false;
+  $('#cameraSettingsRetentionPercent').value = String(Math.max(70, Math.min(95, Number(camera.retention_disk_percent) || 90)));
+  $('#cameraSettingsError').textContent = '';
+  $('#cameraSettingsMessage').textContent = '';
+  $('#cameraSettingsAnalyticsMeta').textContent = 'Consultando clases y reglas…';
+  syncCameraSettingsMode();
+  syncCameraRetentionFields();
+
+  try {
+    const [storage, analyticsConfig] = await Promise.all([
+      api('/api/recordings/storage'),
+      api('/api/analytics/config/' + encodeURIComponent(camera.id)),
+    ]);
+    if (state.currentView !== 'cameraSettings' || state.cameraSettingsID !== camera.id) return;
+    renderCameraSettingsStorage(storage);
+    const enabledClasses = analyticsConfig?.enabled_classes || [];
+    const personEnabled = enabledClasses.includes('person');
+    const rules = analyticsConfig?.rules || [];
+    $('#cameraSettingsAnalyticsMeta').textContent =
+      enabledClasses.length + ' clases activas · Persona ' + (personEnabled ? 'activa' : 'inactiva') + ' · ' + rules.length + ' reglas';
+  } catch (error) {
+    if (!(error instanceof SessionRequiredError)) {
+      $('#cameraSettingsAnalyticsMeta').textContent = 'Analítica no disponible temporalmente.';
+      try {
+        renderCameraSettingsStorage(await api('/api/recordings/storage'));
+      } catch (_) {}
+    }
+  }
+}
+
+async function saveCameraSettings(event) {
+  event.preventDefault();
+  const cameraID = $('#cameraSettingsID').value;
+  const camera = state.cameras.find(item => item.id === cameraID);
+  if (!camera) return;
+
+  const errorBox = $('#cameraSettingsError');
+  const message = $('#cameraSettingsMessage');
+  const button = $('#cameraSettingsSave');
+  const postRoll = Number($('#cameraSettingsPostRoll').value);
+  const retentionPercent = Number($('#cameraSettingsRetentionPercent').value);
+  const mode = $('#cameraSettingsMode').value;
+  const days = mode === 'continuous'
+    ? [0, 1, 2, 3, 4, 5, 6]
+    : $$('#cameraSettingsDays input[type="checkbox"]:checked').map(input => Number(input.value));
+  const start = mode === 'continuous' ? '00:00' : $('#cameraSettingsStart').value;
+  const end = mode === 'continuous' ? '00:00' : $('#cameraSettingsEnd').value;
+  const enabledSchedule = mode !== 'off';
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+
+  errorBox.textContent = '';
+  message.textContent = '';
+  if (!Number.isFinite(postRoll) || postRoll < 1 || postRoll > 600) {
+    errorBox.textContent = 'El post-roll debe estar entre 1 y 600 segundos.';
+    return;
+  }
+  if (!Number.isFinite(retentionPercent) || retentionPercent < 70 || retentionPercent > 95) {
+    errorBox.textContent = 'El umbral de almacenamiento debe estar entre 70% y 95%.';
+    return;
+  }
+  if (mode === 'schedule' && (!days.length || !start || !end)) {
+    errorBox.textContent = 'Completa días, hora de inicio y hora final.';
+    return;
+  }
+
+  button.disabled = true;
+  message.textContent = 'Guardando…';
+  try {
+    await api('/api/cameras/' + encodeURIComponent(cameraID) + '/person-recording', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: $('#cameraSettingsPersonRecording').checked }),
+    });
+    await Promise.all([
+      api('/api/cameras/' + encodeURIComponent(cameraID) + '/recording', {
+        method: 'PUT',
+        body: JSON.stringify({
+          enabled: $('#cameraSettingsEventRecording').checked,
+          post_roll_seconds: postRoll,
+        }),
+      }),
+      api('/api/cameras/' + encodeURIComponent(cameraID) + '/retention', {
+        method: 'PUT',
+        body: JSON.stringify({
+          enabled: $('#cameraSettingsAutoRetention').checked,
+          disk_percent: retentionPercent,
+        }),
+      }),
+      api('/api/cameras/' + encodeURIComponent(cameraID) + '/schedule', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: enabledSchedule, days, start, end, timezone }),
+      }),
+    ]);
+    state.cameras = await api('/api/cameras') || [];
+    renderCameras();
+    setStatus('Configuración actualizada en ' + camera.name, true);
+    await loadCameraSettingsView();
+    $('#cameraSettingsMessage').textContent = 'Configuración guardada';
+  } catch (error) {
+    message.textContent = '';
+    if (!(error instanceof SessionRequiredError)) errorBox.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -3316,6 +3474,26 @@ function confirmAction({ title, message, confirmLabel = 'Confirmar' }) {
     confirmDialog.addEventListener('close', () => resolve(confirmDialog.returnValue === 'confirm'), { once: true });
   });
 }
+
+
+$('#cameraSettingsForm').addEventListener('submit', saveCameraSettings);
+$('#cameraSettingsMode').addEventListener('change', syncCameraSettingsMode);
+$('#cameraSettingsAutoRetention').addEventListener('change', syncCameraRetentionFields);
+$('#cameraSettingsRetentionPercent').addEventListener('input', syncCameraRetentionFields);
+$('#cameraSettingsBack').addEventListener('click', () => navigate('cameras'));
+$('#cameraSettingsOpenLive').addEventListener('click', () => {
+  if (state.cameraSettingsID) openMonitor(state.cameraSettingsID);
+});
+$('#cameraSettingsOpenRecordings').addEventListener('click', () => {
+  if (!state.cameraSettingsID) return;
+  const today = localDateKey(new Date());
+  state.recordingDate = today;
+  navigate('recordings', { path: recordingsPagePath(state.cameraSettingsID, 1, today) });
+});
+$('#cameraSettingsAdvancedAnalytics').addEventListener('click', () => {
+  const camera = state.cameras.find(item => item.id === state.cameraSettingsID);
+  if (camera) openAnalyticsDialog(camera);
+});
 
 $('#analyticsConfigForm').addEventListener('submit', saveAnalyticsConfig);
 $('#analyticsClassSearch').addEventListener('input', renderAnalyticsClassList);

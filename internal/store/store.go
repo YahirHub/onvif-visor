@@ -17,34 +17,38 @@ import (
 )
 
 const (
-	keySize         = 32
-	defaultPostRoll = 20
+	keySize                     = 32
+	defaultPostRoll             = 20
+	defaultRetentionDiskPercent = 90
 )
 
 var ErrNotFound = errors.New("camera not found")
 
 type Camera struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Endpoint         string    `json:"endpoint"`
-	Username         string    `json:"username"`
-	Password         string    `json:"-"`
-	Manufacturer     string    `json:"manufacturer,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	FirmwareVersion  string    `json:"firmware_version,omitempty"`
-	ProfileToken     string    `json:"profile_token,omitempty"`
-	ProfileName      string    `json:"profile_name,omitempty"`
-	RTSPURI          string    `json:"rtsp_uri,omitempty"`
-	EventsSupported  bool      `json:"events_supported"`
-	EventRecording   bool      `json:"event_recording"`
-	PostRollSeconds  int       `json:"post_roll_seconds"`
-	ScheduleEnabled  bool      `json:"schedule_enabled"`
-	ScheduleDays     []int     `json:"schedule_days,omitempty"`
-	ScheduleStart    string    `json:"schedule_start,omitempty"`
-	ScheduleEnd      string    `json:"schedule_end,omitempty"`
-	ScheduleTimezone string    `json:"schedule_timezone,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Endpoint             string    `json:"endpoint"`
+	Username             string    `json:"username"`
+	Password             string    `json:"-"`
+	Manufacturer         string    `json:"manufacturer,omitempty"`
+	Model                string    `json:"model,omitempty"`
+	FirmwareVersion      string    `json:"firmware_version,omitempty"`
+	ProfileToken         string    `json:"profile_token,omitempty"`
+	ProfileName          string    `json:"profile_name,omitempty"`
+	RTSPURI              string    `json:"rtsp_uri,omitempty"`
+	EventsSupported      bool      `json:"events_supported"`
+	EventRecording       bool      `json:"event_recording"`
+	PersonRecording      bool      `json:"person_recording"`
+	PostRollSeconds      int       `json:"post_roll_seconds"`
+	AutoRetention        bool      `json:"auto_retention"`
+	RetentionDiskPercent int       `json:"retention_disk_percent"`
+	ScheduleEnabled      bool      `json:"schedule_enabled"`
+	ScheduleDays         []int     `json:"schedule_days,omitempty"`
+	ScheduleStart        string    `json:"schedule_start,omitempty"`
+	ScheduleEnd          string    `json:"schedule_end,omitempty"`
+	ScheduleTimezone     string    `json:"schedule_timezone,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type persistedCamera struct {
@@ -138,8 +142,18 @@ func (s *Store) load() error {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return fmt.Errorf("decode camera state: %w", err)
 	}
+	legacyRetentionDefaults := state.Version < 2
 	for _, p := range state.Cameras {
 		cam := p.Camera
+		if cam.PostRollSeconds <= 0 {
+			cam.PostRollSeconds = defaultPostRoll
+		}
+		if cam.RetentionDiskPercent <= 0 {
+			cam.RetentionDiskPercent = defaultRetentionDiskPercent
+		}
+		if legacyRetentionDefaults {
+			cam.AutoRetention = true
+		}
 		if p.PasswordCipher != "" {
 			plain, err := s.decrypt(p.PasswordCipher)
 			if err != nil {
@@ -153,7 +167,7 @@ func (s *Store) load() error {
 }
 
 func (s *Store) saveLocked() error {
-	state := persistedState{Version: 1, Cameras: make([]persistedCamera, 0, len(s.cameras))}
+	state := persistedState{Version: 2, Cameras: make([]persistedCamera, 0, len(s.cameras))}
 	ids := make([]string, 0, len(s.cameras))
 	for id := range s.cameras {
 		ids = append(ids, id)
@@ -235,6 +249,10 @@ func (s *Store) Add(cam Camera) (Camera, error) {
 	if cam.PostRollSeconds <= 0 {
 		cam.PostRollSeconds = defaultPostRoll
 	}
+	if cam.RetentionDiskPercent <= 0 {
+		cam.RetentionDiskPercent = defaultRetentionDiskPercent
+		cam.AutoRetention = true
+	}
 	cam.CreatedAt = now
 	cam.UpdatedAt = now
 	s.cameras[cam.ID] = cam
@@ -294,6 +312,44 @@ func (s *Store) SetRecording(id string, enabled bool, postRollSeconds int) (Came
 	}
 	cam.EventRecording = enabled
 	cam.PostRollSeconds = postRollSeconds
+	cam.UpdatedAt = time.Now().UTC()
+	s.cameras[id] = cam
+	if err := s.saveLocked(); err != nil {
+		return Camera{}, err
+	}
+	cam.Password = ""
+	return cam, nil
+}
+
+func (s *Store) SetPersonRecording(id string, enabled bool) (Camera, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cam, ok := s.cameras[id]
+	if !ok {
+		return Camera{}, ErrNotFound
+	}
+	cam.PersonRecording = enabled
+	cam.UpdatedAt = time.Now().UTC()
+	s.cameras[id] = cam
+	if err := s.saveLocked(); err != nil {
+		return Camera{}, err
+	}
+	cam.Password = ""
+	return cam, nil
+}
+
+func (s *Store) SetRetention(id string, enabled bool, diskPercent int) (Camera, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cam, ok := s.cameras[id]
+	if !ok {
+		return Camera{}, ErrNotFound
+	}
+	if diskPercent <= 0 {
+		diskPercent = defaultRetentionDiskPercent
+	}
+	cam.AutoRetention = enabled
+	cam.RetentionDiskPercent = diskPercent
 	cam.UpdatedAt = time.Now().UTC()
 	s.cameras[id] = cam
 	if err := s.saveLocked(); err != nil {

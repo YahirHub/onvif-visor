@@ -27,6 +27,20 @@ func TestWaitForPersonFrameHonorsNotBefore(t *testing.T) {
 	}
 }
 
+func TestRecentPersonFrameExpires(t *testing.T) {
+	now := time.Now().UTC()
+	m := &Manager{personFrames: map[string]PersonFrame{
+		"recent": {DetectedAt: now.Add(-500 * time.Millisecond), Confidence: .8},
+		"stale":  {DetectedAt: now.Add(-5 * time.Second), Confidence: .9},
+	}}
+	if frame, ok := m.RecentPersonFrame("recent", 2*time.Second); !ok || frame.Confidence != .8 {
+		t.Fatalf("recent frame = %#v ok=%v", frame, ok)
+	}
+	if _, ok := m.RecentPersonFrame("stale", 2*time.Second); ok {
+		t.Fatal("stale frame should not be considered recent")
+	}
+}
+
 func TestFitWithinPreservesAspectRatio(t *testing.T) {
 	width, height := fitWithin(2304, 1296, InputWidth, InputHeight)
 	if width != 320 || height != 180 {

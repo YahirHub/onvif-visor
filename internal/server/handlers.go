@@ -130,6 +130,84 @@ func (a *App) handleRecordingSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cam)
 }
 
+func (a *App) handlePersonRecordingSettings(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "solicitud inválida")
+		return
+	}
+	if _, err := a.store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	if req.Enabled && (a.analytics == nil || !a.analytics.Status().Ready) {
+		writeError(w, http.StatusServiceUnavailable, "NanoDet no está disponible para grabar por detección de personas")
+		return
+	}
+	if req.Enabled {
+		cfg, err := a.analytics.CameraConfig(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "no se pudo preparar la detección de personas")
+			return
+		}
+		hasPerson := false
+		for _, className := range cfg.EnabledClasses {
+			if className == "person" {
+				hasPerson = true
+				break
+			}
+		}
+		if !hasPerson {
+			cfg.EnabledClasses = append(cfg.EnabledClasses, "person")
+			if _, err := a.analytics.SaveCameraConfig(r.Context(), id, cfg); err != nil {
+				writeError(w, http.StatusBadRequest, "no se pudo activar la clase persona")
+				return
+			}
+			a.analytics.ReindexCamera(id)
+		}
+	}
+	cam, err := a.store.SetPersonRecording(id, req.Enabled)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "cámara no encontrada")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "no se pudo guardar la grabación por personas")
+		return
+	}
+	writeJSON(w, http.StatusOK, cam)
+}
+
+func (a *App) handleRetentionSettings(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Enabled     bool `json:"enabled"`
+		DiskPercent int  `json:"disk_percent"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "solicitud inválida")
+		return
+	}
+	if req.DiskPercent < 70 || req.DiskPercent > 95 {
+		writeError(w, http.StatusBadRequest, "el umbral de disco debe estar entre 70 y 95 por ciento")
+		return
+	}
+	cam, err := a.store.SetRetention(id, req.Enabled, req.DiskPercent)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "cámara no encontrada")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "no se pudo guardar la retención automática")
+		return
+	}
+	go a.applyRetention()
+	writeJSON(w, http.StatusOK, cam)
+}
+
 func (a *App) handleScheduleSettings(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	previous, _ := a.store.Get(id)

@@ -67,6 +67,45 @@ func TestListNeverReturnsPassword(t *testing.T) {
 	}
 }
 
+func TestRecordingAndRetentionSettingsPersist(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam, err := first.Add(Camera{Name: "Cocina"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cam.AutoRetention || cam.RetentionDiskPercent != defaultRetentionDiskPercent {
+		t.Fatalf("new camera retention defaults = enabled:%v percent:%d", cam.AutoRetention, cam.RetentionDiskPercent)
+	}
+	if _, err := first.SetPersonRecording(cam.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.SetRecording(cam.ID, true, 45); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.SetRetention(cam.ID, true, 88); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := second.Get(cam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.PersonRecording || !loaded.EventRecording || loaded.PostRollSeconds != 45 {
+		t.Fatalf("recording settings = %#v", loaded)
+	}
+	if !loaded.AutoRetention || loaded.RetentionDiskPercent != 88 {
+		t.Fatalf("retention settings = enabled:%v percent:%d", loaded.AutoRetention, loaded.RetentionDiskPercent)
+	}
+}
+
 func TestSchedulePersists(t *testing.T) {
 	dir := t.TempDir()
 	first, err := Open(dir)

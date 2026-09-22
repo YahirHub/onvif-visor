@@ -46,6 +46,17 @@ func (a *App) forgetRecordingEvents(cameraID string, names []string) {
 	a.eventsMu.Unlock()
 }
 
+func (a *App) deleteRecordingArtifacts(ctx context.Context, cameraID, name string) error {
+	if err := a.media.DeleteRecording(cameraID, name); err != nil {
+		return err
+	}
+	if a.analytics != nil {
+		_ = a.analytics.ForgetRecording(ctx, cameraID, name)
+	}
+	a.forgetRecordingEvents(cameraID, []string{name})
+	return nil
+}
+
 func (a *App) handleRecordingMetadata(w http.ResponseWriter, r *http.Request) {
 	cameraID, name := r.PathValue("cameraID"), r.PathValue("name")
 	if _, err := a.store.Get(cameraID); err != nil {
@@ -72,7 +83,7 @@ func (a *App) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Cámara no encontrada.")
 		return
 	}
-	if err := a.media.DeleteRecording(cameraID, name); err != nil {
+	if err := a.deleteRecordingArtifacts(r.Context(), cameraID, name); err != nil {
 		switch {
 		case errors.Is(err, media.ErrRecordingNotFound):
 			writeError(w, http.StatusNotFound, "Grabación no encontrada.")
@@ -83,10 +94,6 @@ func (a *App) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if a.analytics != nil {
-		_ = a.analytics.ForgetRecording(r.Context(), cameraID, name)
-	}
-	a.forgetRecordingEvents(cameraID, []string{name})
 	if session, ok := currentSession(r); ok {
 		log.Printf("recording_delete user=%s camera=%s name=%s", session.Username, cameraID, name)
 	}
@@ -143,7 +150,7 @@ func (a *App) handleDeleteRecordingsBatch(w http.ResponseWriter, r *http.Request
 			result.SkippedActive++
 			continue
 		}
-		if err := a.media.DeleteRecording(req.CameraID, file.Name); err != nil {
+		if err := a.deleteRecordingArtifacts(r.Context(), req.CameraID, file.Name); err != nil {
 			if errors.Is(err, media.ErrRecordingActive) {
 				result.SkippedActive++
 				continue
@@ -155,11 +162,7 @@ func (a *App) handleDeleteRecordingsBatch(w http.ResponseWriter, r *http.Request
 			return
 		}
 		result.Deleted = append(result.Deleted, file.Name)
-		if a.analytics != nil {
-			_ = a.analytics.ForgetRecording(r.Context(), req.CameraID, file.Name)
-		}
 	}
-	a.forgetRecordingEvents(req.CameraID, result.Deleted)
 	result.DeletedCount = len(result.Deleted)
 	if session, ok := currentSession(r); ok {
 		log.Printf("recording_delete_batch user=%s camera=%s deleted=%d skipped_active=%d all=%t", session.Username, req.CameraID, result.DeletedCount, result.SkippedActive, req.All)

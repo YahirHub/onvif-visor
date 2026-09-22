@@ -161,4 +161,7 @@ func TestRecordingStorageStatsCountsAllMKVs(t *testing.T) {
 	if stats.FileCount != 2 || stats.TotalBytes != 12 {
 		t.Fatalf("stats = %#v, want 2 files / 12 bytes", stats)
 	}
+	if stats.DiskTotalBytes <= 0 || stats.DiskAvailableBytes <= 0 || stats.DiskUsedPercent < 0 || stats.DiskUsedPercent > 100 {
+		t.Fatalf("disk stats = %#v", stats)
+	}
 }

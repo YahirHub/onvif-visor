@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -34,8 +35,11 @@ type RecordingFile struct {
 }
 
 type RecordingStorageStats struct {
-	TotalBytes int64 `json:"total_bytes"`
-	FileCount  int   `json:"file_count"`
+	TotalBytes         int64   `json:"total_bytes"`
+	FileCount          int     `json:"file_count"`
+	DiskTotalBytes     int64   `json:"disk_total_bytes"`
+	DiskAvailableBytes int64   `json:"disk_available_bytes"`
+	DiskUsedPercent    float64 `json:"disk_used_percent"`
 }
 
 type durationCacheEntry struct {
@@ -118,6 +122,16 @@ func (m *Manager) RecordingStorageStats() (RecordingStorageStats, error) {
 	})
 	if err != nil {
 		return RecordingStorageStats{}, fmt.Errorf("scan recordings storage: %w", err)
+	}
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(m.recordingsDir, &fs); err == nil {
+		blockSize := int64(fs.Bsize)
+		stats.DiskTotalBytes = int64(fs.Blocks) * blockSize
+		stats.DiskAvailableBytes = int64(fs.Bavail) * blockSize
+		if stats.DiskTotalBytes > 0 {
+			used := stats.DiskTotalBytes - stats.DiskAvailableBytes
+			stats.DiskUsedPercent = float64(used) / float64(stats.DiskTotalBytes) * 100
+		}
 	}
 	return stats, nil
 }

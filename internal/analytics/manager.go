@@ -255,6 +255,19 @@ func (m *Manager) ForgetRecording(ctx context.Context, cameraID, recordingName s
 	return m.store.DeleteRecording(ctx, cameraID, recordingName)
 }
 
+func (m *Manager) RecentPersonFrame(cameraID string, maxAge time.Duration) (PersonFrame, bool) {
+	if maxAge <= 0 {
+		maxAge = 2 * time.Second
+	}
+	m.mu.Lock()
+	frame, ok := m.personFrames[cameraID]
+	m.mu.Unlock()
+	if !ok || frame.DetectedAt.IsZero() || time.Since(frame.DetectedAt) > maxAge {
+		return PersonFrame{}, false
+	}
+	return frame, true
+}
+
 func (m *Manager) WaitForPersonFrame(ctx context.Context, cameraID string, notBefore time.Time) (PersonFrame, bool) {
 	check := func() (PersonFrame, bool) {
 		m.mu.Lock()

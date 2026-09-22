@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,30 @@ func (a *App) handleSmartAnalyticsEvent(event analytics.SmartEvent) {
 	if err != nil {
 		return
 	}
+	status := a.media.Status(cam.ID)
+	triggered := false
+	if cam.PersonRecording && event.ClassName == "person" {
+		streamURI, uriErr := onvifsvc.CredentialedRTSP(cam.RTSPURI, cam.Username, cam.Password)
+		if uriErr == nil {
+			if next, triggerErr := a.media.Trigger(cam.ID, streamURI, triggerDuration(cam)); triggerErr == nil {
+				status = next
+				triggered = true
+			} else {
+				logCameraError(cam.ID, "person-record", triggerErr)
+			}
+		}
+	}
+
+	recordingName := event.RecordingName
+	recordingOffset := event.OffsetSecond
+	if status.Path != "" && !status.StartedAt.IsZero() {
+		recordingName = filepath.Base(status.Path)
+		recordingOffset = event.OccurredAt.Sub(status.StartedAt).Seconds()
+		if recordingOffset < 0 {
+			recordingOffset = 0
+		}
+	}
+
 	data := map[string]string{
 		"Class":      event.ClassName,
 		"Confidence": fmt.Sprintf("%.0f%%", event.Confidence*100),
@@ -38,12 +63,12 @@ func (a *App) handleSmartAnalyticsEvent(event analytics.SmartEvent) {
 	item := CameraEvent{
 		CameraID: cam.ID, CameraName: cam.Name,
 		Topic: "analytics/" + event.Type, Time: event.OccurredAt,
-		Data: data, RecordingName: event.RecordingName, RecordingOffset: event.OffsetSecond,
-		ObjectClass: event.ClassName, ObjectOffset: event.OffsetSecond, ObjectConfidence: event.Confidence,
+		Data: data, Triggered: triggered, RecordingName: recordingName, RecordingOffset: recordingOffset,
+		ObjectClass: event.ClassName, ObjectOffset: recordingOffset, ObjectConfidence: event.Confidence,
 		SmartType: event.Type, ZoneName: event.ZoneName, LineName: event.LineName, Direction: event.Direction,
 	}
 	if event.ClassName == "person" {
-		item.PersonOffset = event.OffsetSecond
+		item.PersonOffset = recordingOffset
 		item.PersonConfidence = event.Confidence
 	}
 	a.eventsMu.Lock()

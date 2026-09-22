@@ -110,6 +110,8 @@ func New(cfg Config) (*App, error) {
 	app.startExistingWatchers()
 	app.startExistingAnalytics()
 	app.startScheduler()
+	app.startPersonRecordingManager()
+	app.startRetentionManager()
 	app.startTelegramIntegration()
 	return app, nil
 }
@@ -148,6 +150,8 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/cameras", a.handleAddCamera)
 	a.mux.HandleFunc("DELETE /api/cameras/{id}", a.handleDeleteCamera)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/recording", a.handleRecordingSettings)
+	a.mux.HandleFunc("PUT /api/cameras/{id}/person-recording", a.handlePersonRecordingSettings)
+	a.mux.HandleFunc("PUT /api/cameras/{id}/retention", a.handleRetentionSettings)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/schedule", a.handleScheduleSettings)
 	a.mux.HandleFunc("GET /api/cameras/{id}/live", a.handleLive)
 	a.mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.handleSnapshot)
@@ -177,6 +181,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/integrations/telegram/code", a.handleTelegramCode)
 	a.mux.HandleFunc("GET /{$}", a.handleApp)
 	a.mux.HandleFunc("GET /camaras", a.handleApp)
+	a.mux.HandleFunc("GET /camaras/{id}/configuracion", a.handleApp)
 	a.mux.HandleFunc("GET /camara/{id}", a.handleApp)
 	a.mux.HandleFunc("GET /multivista", a.handleApp)
 	a.mux.HandleFunc("GET /grabaciones", a.handleApp)

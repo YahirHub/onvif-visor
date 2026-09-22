@@ -114,6 +114,124 @@
           </div>
         </section>
 
+
+        <section id="cameraSettingsView" class="app-view" hidden>
+          <div class="camera-settings-page">
+            <div class="camera-settings-toolbar">
+              <button id="cameraSettingsBack" class="icon-button" type="button" aria-label="Volver a cámaras">←</button>
+              <div class="camera-settings-heading">
+                <p class="eyebrow">CONFIGURACIÓN DE CÁMARA</p>
+                <h2 id="cameraSettingsTitle">Cámara</h2>
+                <p id="cameraSettingsMeta" class="subtitle"></p>
+              </div>
+              <div class="camera-settings-toolbar-actions">
+                <button id="cameraSettingsOpenLive" class="button secondary" type="button">Ver en vivo</button>
+                <button id="cameraSettingsOpenRecordings" class="button ghost" type="button">Grabaciones</button>
+              </div>
+            </div>
+
+            <form id="cameraSettingsForm" class="camera-settings-form">
+              <input id="cameraSettingsID" type="hidden">
+
+              <section class="camera-settings-panel camera-settings-overview">
+                <div class="camera-settings-preview">
+                  <img id="cameraSettingsSnapshot" alt="Vista previa de la cámara">
+                </div>
+                <div class="camera-settings-overview-copy">
+                  <strong id="cameraSettingsDeviceName">Cámara ONVIF</strong>
+                  <span id="cameraSettingsEndpoint" class="mono"></span>
+                  <p>Todos los modos usan el mismo stream y el mismo grabador; nunca se crean dos archivos simultáneos para la misma cámara.</p>
+                </div>
+              </section>
+
+              <div class="camera-settings-grid">
+                <section class="camera-settings-panel">
+                  <div class="camera-settings-section-head">
+                    <div><p class="eyebrow">DISPARADORES</p><h3>Cuándo grabar</h3></div>
+                  </div>
+                  <label class="settings-switch">
+                    <input id="cameraSettingsEventRecording" type="checkbox">
+                    <span><strong>Movimiento / eventos ONVIF</strong><small>Inicia o prolonga la grabación cuando la cámara reporta actividad.</small></span>
+                  </label>
+                  <label class="settings-switch">
+                    <input id="cameraSettingsPersonRecording" type="checkbox">
+                    <span><strong>Personas detectadas por NanoDet</strong><small>Graba mientras haya una persona visible y conserva el post-roll al salir de escena.</small></span>
+                  </label>
+                  <label class="field compact-settings-field">Post-roll
+                    <input id="cameraSettingsPostRoll" type="number" min="1" max="600" value="20">
+                    <small>Segundos que se mantienen después del último evento o persona.</small>
+                  </label>
+                </section>
+
+                <section class="camera-settings-panel">
+                  <div class="camera-settings-section-head">
+                    <div><p class="eyebrow">ARCHIVO</p><h3>Grabación continua o programada</h3></div>
+                  </div>
+                  <label class="field">Modo
+                    <select id="cameraSettingsMode">
+                      <option value="off">Sin grabación programada</option>
+                      <option value="continuous">Continuo 24/7</option>
+                      <option value="schedule">Por horario</option>
+                    </select>
+                  </label>
+                  <div id="cameraSettingsContinuousNote" class="recording-mode-note" hidden>
+                    <strong>Continuo 24/7</strong>
+                    <span>Guarda video todo el tiempo y abre un archivo nuevo cada día. Movimiento y personas se marcan dentro del mismo archivo.</span>
+                  </div>
+                  <div id="cameraSettingsScheduleWrap" class="camera-settings-schedule">
+                    <span class="schedule-label">Días</span>
+                    <div id="cameraSettingsDays" class="weekday-grid">
+                      <label><input type="checkbox" value="1"><span>Lun</span></label>
+                      <label><input type="checkbox" value="2"><span>Mar</span></label>
+                      <label><input type="checkbox" value="3"><span>Mié</span></label>
+                      <label><input type="checkbox" value="4"><span>Jue</span></label>
+                      <label><input type="checkbox" value="5"><span>Vie</span></label>
+                      <label><input type="checkbox" value="6"><span>Sáb</span></label>
+                      <label><input type="checkbox" value="0"><span>Dom</span></label>
+                    </div>
+                    <div class="form-row">
+                      <label class="field">Inicio<input id="cameraSettingsStart" type="time" value="00:00"></label>
+                      <label class="field">Final<input id="cameraSettingsEnd" type="time" value="23:59"></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="camera-settings-panel">
+                  <div class="camera-settings-section-head">
+                    <div><p class="eyebrow">ALMACENAMIENTO</p><h3>Retención automática</h3></div>
+                    <strong id="cameraSettingsDiskUsage">—</strong>
+                  </div>
+                  <div class="storage-meter" aria-hidden="true"><span id="cameraSettingsDiskBar"></span></div>
+                  <p id="cameraSettingsDiskMeta" class="hint">Consultando espacio disponible…</p>
+                  <label class="settings-switch">
+                    <input id="cameraSettingsAutoRetention" type="checkbox">
+                    <span><strong>Liberar espacio automáticamente</strong><small>Elimina primero los archivos más antiguos de esta cámara; nunca elimina la grabación activa.</small></span>
+                  </label>
+                  <label class="field compact-settings-field">Empezar limpieza al usar
+                    <div class="percent-field"><input id="cameraSettingsRetentionPercent" type="number" min="70" max="95" value="90"><span>% del disco</span></div>
+                    <small id="cameraSettingsRetentionHelp">Al alcanzar el umbral se libera margen para evitar llenar el disco.</small>
+                  </label>
+                </section>
+
+                <section class="camera-settings-panel">
+                  <div class="camera-settings-section-head">
+                    <div><p class="eyebrow">VISIÓN</p><h3>Analítica inteligente</h3></div>
+                  </div>
+                  <p id="cameraSettingsAnalyticsMeta" class="camera-settings-copy">NanoDet analiza esta cámara localmente.</p>
+                  <button id="cameraSettingsAdvancedAnalytics" class="button secondary full-button" type="button">Clases, zonas, líneas y reglas</button>
+                  <p class="hint">La opción “Personas detectadas” activa automáticamente la clase Persona si fue deshabilitada en la configuración avanzada.</p>
+                </section>
+              </div>
+
+              <div id="cameraSettingsError" class="form-error" role="alert"></div>
+              <div class="camera-settings-savebar">
+                <span id="cameraSettingsMessage" class="form-message" role="status" aria-live="polite"></span>
+                <button id="cameraSettingsSave" class="button primary" type="submit">Guardar configuración</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
         <section id="monitorView" class="app-view" hidden>
           <div class="monitor-toolbar">
             <div class="monitor-toolbar-left">
@@ -588,9 +706,7 @@
         <span class="open-overlay"><strong class="camera-card-name"></strong><small class="camera-card-meta"></small></span>
       </button>
       <div class="camera-hover-actions">
-        <label class="compact-toggle" title="Grabar cuando haya movimiento"><input class="record-toggle" type="checkbox"><span>REC</span></label>
-        <button class="camera-analytics icon-button" type="button" aria-label="Configurar analítica inteligente" title="Analítica inteligente">AI</button>
-        <button class="camera-schedule icon-button" type="button" aria-label="Programar grabación" title="Programar grabación">◷</button>
+        <button class="camera-settings icon-button" type="button" aria-label="Configurar cámara" title="Configurar cámara">⚙</button>
         <button class="camera-delete icon-button" type="button" aria-label="Eliminar cámara" title="Eliminar">×</button>
       </div>
     </article>
