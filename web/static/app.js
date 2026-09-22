@@ -27,6 +27,7 @@ const state = {
   playbackRouteOffset: 0,
   playbackPersonSegments: [],
   timelineZoom: 1,
+  timelineExpanded: false,
   snapshotRevision: Date.now(),
   sessions: [],
   profile: null,
@@ -1212,6 +1213,7 @@ function renderAnalyticsSummary() {
     empty.textContent = 'Aún no hay clases detectadas en esta fecha.';
     classes.append(empty);
   }
+  updateTimelineActivityHint();
 }
 
 async function reindexAnalytics() {
@@ -1642,12 +1644,58 @@ function analyticsClassLabel(className) {
   return String(className || 'Objeto').replace(/\b\w/g, char => char.toUpperCase());
 }
 
+function analyticsSummaryClassCount(className) {
+  const item = (state.analyticsSummary?.classes || []).find(entry => entry.class_name === className);
+  return Math.max(0, Number(item?.count) || 0);
+}
+
+function updateTimelineActivityHint() {
+  const panel = $('#recordingTimelinePanel');
+  const hint = $('#timelineActivityHint');
+  if (!panel || !hint) return;
+
+  const personSegments = Math.max(0, Number(panel.dataset.personSegments) || 0);
+  const classCount = Math.max(0, Number(panel.dataset.classCount) || 0);
+  const personCount = analyticsSummaryClassCount('person');
+
+  if (state.timelineExpanded) {
+    hint.textContent = classCount
+      ? classCount + ' clases detectadas · pulsa cualquier tramo para abrir el video en ese instante.'
+      : 'Sin objetos detectados en esta fecha.';
+    return;
+  }
+  if (personCount > 0) {
+    hint.textContent = personCount + ' detecciones de persona · pulsa un marcador para ir directamente al video.';
+  } else if (personSegments > 0) {
+    hint.textContent = personSegments + ' tramos de persona · pulsa un marcador para ir directamente al video.';
+  } else {
+    hint.textContent = 'Sin detecciones de persona en esta fecha.';
+  }
+}
+
+function syncTimelineDetailUI(extraClasses) {
+  const panel = $('#recordingTimelinePanel');
+  const button = $('#timelineDetailsBtn');
+  if (!panel || !button) return;
+
+  panel.classList.toggle('expanded', state.timelineExpanded);
+  panel.classList.toggle('timeline-compact', !state.timelineExpanded);
+  button.hidden = extraClasses <= 0 && !state.timelineExpanded;
+  button.textContent = state.timelineExpanded ? 'Mostrar solo personas' : 'Ver todas las clases';
+  button.setAttribute('aria-expanded', String(state.timelineExpanded));
+  button.title = state.timelineExpanded
+    ? 'Volver a la vista compacta'
+    : extraClasses > 0 ? 'Mostrar ' + extraClasses + ' clases adicionales' : 'No hay más clases en esta fecha';
+}
+
 function renderObjectTimeline(recordings) {
   const tracks = $('#analyticsTracks');
   const labels = $('#analyticsTrackLabels');
-  if (!tracks || !labels) return;
+  const panel = $('#recordingTimelinePanel');
+  if (!tracks || !labels || !panel) return;
   tracks.replaceChildren();
   labels.replaceChildren();
+
   const bounds = selectedDateBounds();
   if (!bounds) return;
   const byName = new Map(recordings.map(recording => [recording.name, recording]));
@@ -1660,31 +1708,42 @@ function renderObjectTimeline(recordings) {
     const end = recordingStart + Math.max(Number(segment.end_seconds) || 0, Number(segment.start_seconds) || 0) * 1000;
     return end > bounds.start && start < bounds.end;
   });
-  const classes = [...new Map(visibleSegments.map(segment => [segment.class_name, segment])).values()]
-    .sort((a, b) => (Number(a.class_id) || 0) - (Number(b.class_id) || 0));
 
-  if (!classes.length) {
-    const label = document.createElement('span');
-    label.textContent = 'Objetos';
-    labels.append(label);
-    const empty = document.createElement('div');
-    empty.className = 'analytics-object-track empty';
-    empty.textContent = 'Sin objetos detectados';
-    tracks.append(empty);
-    return;
+  const classMap = new Map();
+  for (const segment of visibleSegments) {
+    if (!classMap.has(segment.class_name)) classMap.set(segment.class_name, segment);
   }
+  const personTemplate = classMap.get('person') || { class_name: 'person', class_id: 0 };
+  const allClasses = [...classMap.values()].sort((a, b) => {
+    if (a.class_name === 'person') return -1;
+    if (b.class_name === 'person') return 1;
+    return (Number(a.class_id) || 0) - (Number(b.class_id) || 0);
+  });
+  if (!allClasses.some(item => item.class_name === 'person')) allClasses.unshift(personTemplate);
+
+  const extraClasses = allClasses.filter(item => item.class_name !== 'person').length;
+  const classes = state.timelineExpanded ? allClasses : [personTemplate];
+  const personSegments = visibleSegments.filter(segment => segment.class_name === 'person').length;
+  panel.dataset.personSegments = String(personSegments);
+  panel.dataset.classCount = String(classMap.size);
+  syncTimelineDetailUI(extraClasses);
+  updateTimelineActivityHint();
 
   for (const classSegment of classes) {
     const className = classSegment.class_name;
+    const isPerson = className === 'person';
     const label = document.createElement('span');
-    label.textContent = analyticsClassLabel(className);
-    label.title = analyticsClassLabel(className);
+    label.textContent = isPerson ? 'Personas' : analyticsClassLabel(className);
+    label.title = isPerson ? 'Personas detectadas' : analyticsClassLabel(className);
     labels.append(label);
 
     const timeline = document.createElement('div');
     timeline.className = 'analytics-object-track';
+    timeline.classList.toggle('person-track', isPerson);
     timeline.dataset.className = className;
-    for (const segment of visibleSegments.filter(item => item.class_name === className)) {
+    const classSegments = visibleSegments.filter(item => item.class_name === className);
+
+    for (const segment of classSegments) {
       const recording = byName.get(segment.recording_name);
       const recordingStart = new Date(recording.started_at).getTime();
       const start = recordingStart + Math.max(0, Number(segment.start_seconds) || 0) * 1000;
@@ -1694,15 +1753,21 @@ function renderObjectTimeline(recordings) {
       const marker = document.createElement('button');
       marker.type = 'button';
       marker.className = 'analytics-object-segment';
+      marker.classList.toggle('person-segment-marker', isPerson);
       marker.style.left = `${geometry.left}%`;
       marker.style.width = `${geometry.width}%`;
       const confidence = Math.round((Number(segment.max_confidence) || 0) * 100);
       const moment = new Date(recordingStart + (Number(segment.peak_seconds) || 0) * 1000);
-      const title = `${analyticsClassLabel(className)} · ${moment.toLocaleTimeString()} · ${confidence}%`;
+      const title = `${isPerson ? 'Persona' : analyticsClassLabel(className)} · ${moment.toLocaleTimeString()} · ${confidence}%`;
       marker.title = title;
       marker.setAttribute('aria-label', `Abrir ${title}`);
       marker.addEventListener('click', () => selectRecording(recording, Number(segment.peak_seconds) || 0));
       timeline.append(marker);
+    }
+
+    if (!classSegments.length) {
+      timeline.classList.add('empty');
+      timeline.textContent = isPerson ? 'Sin personas detectadas' : 'Sin detecciones';
     }
     tracks.append(timeline);
   }
@@ -3387,6 +3452,10 @@ $('#recordingsDeleteAllBtn').addEventListener('click', deleteAllRecordings);
 $('#recordingDeleteScope').addEventListener('change', syncRecordingDeleteScope);
 $('#recordingDeleteFrom').addEventListener('change', updateRecordingDeleteAction);
 $('#recordingDeleteTo').addEventListener('change', updateRecordingDeleteAction);
+$('#timelineDetailsBtn').addEventListener('click', () => {
+  state.timelineExpanded = !state.timelineExpanded;
+  renderObjectTimeline(recordingsForCamera(state.recordingCameraID));
+});
 $('#timelineZoomOutBtn').addEventListener('click', () => setTimelineZoom(state.timelineZoom / 1.5));
 $('#timelineZoomInBtn').addEventListener('click', () => setTimelineZoom(state.timelineZoom * 1.5));
 $('#timelineZoomResetBtn').addEventListener('click', () => setTimelineZoom(TIMELINE_ZOOM_MIN));

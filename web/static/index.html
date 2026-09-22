@@ -186,12 +186,13 @@
                   <div id="analyticsSummaryClasses" class="analytics-summary-classes"></div>
                 </section>
 
-                <section class="timeline-panel">
+                <section id="recordingTimelinePanel" class="timeline-panel timeline-compact">
                   <div class="timeline-head">
-                    <div><h3>Línea de tiempo inteligente</h3><p>Grabaciones y objetos detectados por NanoDet, separados por clase.</p></div>
+                    <div><h3>Línea de tiempo inteligente</h3><p>Vista rápida de grabación y personas. Expande solo cuando necesites más detalle.</p></div>
                     <div class="timeline-head-actions">
                       <span id="analyticsStatus" class="analytics-status">Analítica…</span>
                       <button id="recordingOpenDayBtn" class="button secondary compact-button" type="button" hidden>Abrir archivo del día</button>
+                      <button id="timelineDetailsBtn" class="button ghost compact-button timeline-details-button" type="button" aria-expanded="false">Ver todas las clases</button>
                       <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
                       <div class="timeline-zoom-controls" role="group" aria-label="Zoom de la línea de tiempo">
                         <button id="timelineZoomOutBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Alejar línea de tiempo" title="Alejar">−</button>
@@ -213,9 +214,22 @@
                       </div>
                     </div>
                   </div>
-                  <p class="timeline-gesture-hint">Pellizca para ampliar · touchpad: Ctrl + gesto/rueda · desliza horizontalmente para recorrer el día.</p>
+                  <p id="timelineActivityHint" class="timeline-activity-hint">Cargando detecciones de persona…</p>
+                  <p class="timeline-gesture-hint">Pellizca para ampliar · Ctrl + rueda para zoom · arrastra para recorrer el día.</p>
                   <p id="timelineEmpty" class="timeline-empty" hidden>No hay clips en esta fecha.</p>
                 </section>
+
+                <div class="section-toolbar recording-list-head">
+                  <div><h2>Archivos</h2><p id="recordingListMeta">0 grabaciones</p></div>
+                  <button id="recordingsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
+                </div>
+                <div id="recordingList" class="recording-grid"></div>
+                <nav id="recordingPagination" class="recording-pagination" aria-label="Páginas de grabaciones" hidden>
+                  <a id="recordingPagePrev" class="button ghost compact-button recording-page-link" href="#">← Anterior</a>
+                  <div id="recordingPageNumbers" class="recording-page-numbers"></div>
+                  <span id="recordingPageStatus" class="recording-page-status" aria-live="polite"></span>
+                  <a id="recordingPageNext" class="button ghost compact-button recording-page-link" href="#">Siguiente →</a>
+                </nav>
 
                 <div class="recording-retention-bar">
                   <div class="recording-retention-filters">
@@ -239,18 +253,6 @@
                     <button id="recordingsDeleteAllBtn" class="button danger-solid" type="button">Eliminar todos</button>
                   </div>
                 </div>
-
-                <div class="section-toolbar recording-list-head">
-                  <div><h2>Archivos</h2><p id="recordingListMeta">0 grabaciones</p></div>
-                  <button id="recordingsRefreshBtn" class="button ghost compact-button" type="button" title="Actualizar">↻</button>
-                </div>
-                <div id="recordingList" class="recording-grid"></div>
-                <nav id="recordingPagination" class="recording-pagination" aria-label="Páginas de grabaciones" hidden>
-                  <a id="recordingPagePrev" class="button ghost compact-button recording-page-link" href="#">← Anterior</a>
-                  <div id="recordingPageNumbers" class="recording-page-numbers"></div>
-                  <span id="recordingPageStatus" class="recording-page-status" aria-live="polite"></span>
-                  <a id="recordingPageNext" class="button ghost compact-button recording-page-link" href="#">Siguiente →</a>
-                </nav>
               </div>
             </div>
           </div>

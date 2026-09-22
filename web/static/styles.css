@@ -1027,3 +1027,174 @@ dialog.analytics-dialog { width: min(96vw, 1180px); max-height: 92vh; }
   .analytics-dialog .dialog-actions .form-message { width: 100%; }
   .analytics-summary-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
+
+
+/* Biblioteca de grabaciones: timeline compacta por defecto */
+#recordingTimelinePanel {
+  margin-bottom: .38rem;
+  padding: .42rem 0 .08rem;
+}
+#recordingTimelinePanel .timeline-head {
+  align-items: center;
+  margin-bottom: .34rem;
+}
+#recordingTimelinePanel .timeline-head h3 {
+  margin-bottom: .04rem;
+  font-size: .72rem;
+}
+#recordingTimelinePanel .timeline-head p {
+  font-size: .53rem;
+}
+#recordingTimelinePanel .timeline-head-actions {
+  align-items: center;
+  gap: .3rem;
+}
+#recordingTimelinePanel .date-filter {
+  gap: .3rem;
+}
+#recordingTimelinePanel .date-filter input {
+  width: 132px;
+  padding: .34rem .42rem;
+  font-size: .6rem;
+}
+#recordingTimelinePanel .timeline-zoom-controls {
+  padding: .08rem;
+}
+#recordingTimelinePanel .timeline-zoom-button {
+  min-width: 25px;
+  min-height: 25px;
+}
+#recordingTimelinePanel .timeline-zoom-reset {
+  height: 25px;
+  min-width: 44px;
+}
+.timeline-details-button {
+  white-space: nowrap;
+}
+.timeline-activity-hint {
+  margin: .24rem 0 0 70px;
+  color: #7c8c9a;
+  font-size: .52rem;
+  line-height: 1.35;
+}
+.timeline-compact .timeline-gesture-hint {
+  display: none;
+}
+.timeline-compact .timeline-label-column,
+.timeline-compact .timeline-canvas {
+  grid-template-rows: 14px 26px auto;
+  gap: 3px;
+}
+.timeline-compact .timeline-canvas .timeline-ruler {
+  height: 14px;
+  font-size: .46rem;
+}
+.timeline-compact .timeline-label-column span {
+  font-size: .47rem;
+}
+.timeline-compact .recording-timeline {
+  height: 26px;
+  border-radius: 5px;
+}
+.timeline-compact .timeline-clip {
+  top: 4px;
+  height: 18px;
+  border-radius: 4px;
+}
+.timeline-compact .analytics-track-labels,
+.timeline-compact .analytics-timeline-tracks {
+  gap: 3px;
+}
+.timeline-compact .analytics-track-labels span {
+  min-height: 24px;
+  font-size: .48rem;
+}
+.timeline-compact .analytics-object-track {
+  height: 24px;
+  border-radius: 5px;
+}
+.timeline-compact .analytics-object-segment {
+  top: 5px;
+  height: 14px;
+  min-width: 4px;
+}
+.analytics-object-track.person-track {
+  background-color: #0d1217;
+}
+.analytics-object-segment.person-segment-marker {
+  background: rgba(242, 201, 76, .78);
+  box-shadow: inset 0 0 0 1px rgba(255, 231, 145, .28);
+}
+.analytics-object-segment.person-segment-marker:hover,
+.analytics-object-segment.person-segment-marker:focus-visible {
+  background: rgba(255, 216, 82, .98);
+  box-shadow: 0 0 0 2px rgba(242, 201, 76, .18);
+}
+#recordingTimelinePanel.expanded {
+  padding-bottom: .16rem;
+}
+#recordingTimelinePanel.expanded .timeline-activity-hint {
+  color: #62717f;
+}
+.analytics-daily-summary {
+  gap: .38rem;
+  margin-bottom: .45rem;
+  padding: .55rem .62rem;
+}
+.analytics-summary-grid {
+  gap: .28rem;
+}
+.analytics-summary-grid > div {
+  padding: .4rem .46rem;
+}
+.analytics-summary-grid strong {
+  font-size: .76rem;
+}
+.analytics-summary-classes {
+  min-height: 18px;
+}
+.analytics-summary-chip {
+  padding: .18rem .36rem;
+  font-size: .51rem;
+}
+.recording-list-head {
+  margin-top: .32rem;
+  margin-bottom: .42rem;
+}
+.recording-retention-bar {
+  margin: .85rem 0 .15rem;
+  opacity: .88;
+}
+
+@media (max-width: 760px) {
+  #recordingTimelinePanel .timeline-head {
+    align-items: flex-start;
+  }
+  #recordingTimelinePanel .timeline-head-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  #recordingTimelinePanel .date-filter {
+    margin-left: auto;
+  }
+  .timeline-activity-hint {
+    margin-left: 52px;
+  }
+  .timeline-compact .timeline-label-column,
+  .timeline-compact .timeline-canvas {
+    grid-template-rows: 14px 26px auto;
+  }
+}
+
+@media (max-width: 480px) {
+  #recordingTimelinePanel .timeline-head-actions .date-filter {
+    width: 100%;
+    margin-left: 0;
+  }
+  .timeline-activity-hint {
+    margin-left: 0;
+  }
+  .timeline-details-button {
+    flex: 1 1 auto;
+  }
+}
