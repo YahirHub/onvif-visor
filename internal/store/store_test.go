@@ -67,6 +67,36 @@ func TestListNeverReturnsPassword(t *testing.T) {
 	}
 }
 
+func TestSetNamePersists(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam, err := first.Add(Camera{Name: "Original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := first.SetName(cam.ID, "Entrada principal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Entrada principal" {
+		t.Fatalf("updated name = %q", updated.Name)
+	}
+	second, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := second.Get(cam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != "Entrada principal" {
+		t.Fatalf("persisted name = %q", loaded.Name)
+	}
+}
+
 func TestRecordingAndRetentionSettingsPersist(t *testing.T) {
 	dir := t.TempDir()
 	first, err := Open(dir)

@@ -41,6 +41,53 @@ func TestStoreCompleteAndFingerprint(t *testing.T) {
 	}
 }
 
+func TestRecordingPersonStatesOnlyTrustsCompletedCurrentAnalysis(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	withPerson := RecordingAnalysis{
+		CameraID: "cam", RecordingName: "with-person.mkv",
+		SizeBytes: 10, ModifiedUnixNS: 1, DurationSecond: 12,
+		Model: AnalysisModelKey, AnalyzedAt: time.Now(),
+	}
+	if err := s.CompleteObjects(ctx, withPerson, []ObjectSegment{{
+		ClassID: 0, ClassName: "person", StartSecond: 1, EndSecond: 4,
+		PeakSecond: 2, MaxConfidence: .8, BestScore: .9, Source: "offline",
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	withoutPerson := RecordingAnalysis{
+		CameraID: "cam", RecordingName: "without-person.mkv",
+		SizeBytes: 11, ModifiedUnixNS: 2, DurationSecond: 10,
+		Model: AnalysisModelKey, AnalyzedAt: time.Now(),
+	}
+	if err := s.CompleteObjects(ctx, withoutPerson, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkAnalyzing(ctx, "cam", "pending.mkv", 12, 3, 10, AnalysisModelKey); err != nil {
+		t.Fatal(err)
+	}
+
+	complete, persons, err := s.RecordingPersonStates(ctx, "cam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete["with-person.mkv"] || !complete["without-person.mkv"] {
+		t.Fatalf("complete index = %#v", complete)
+	}
+	if complete["pending.mkv"] {
+		t.Fatalf("pending recording was treated as complete: %#v", complete)
+	}
+	if !persons["with-person.mkv"] || persons["without-person.mkv"] {
+		t.Fatalf("person index = %#v", persons)
+	}
+}
+
 func TestLiveProgressCanBeCompletedWithoutDroppingSegments(t *testing.T) {
 	ctx := context.Background()
 	s, err := OpenStore(t.TempDir())

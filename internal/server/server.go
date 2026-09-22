@@ -149,6 +149,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/cameras", a.handleListCameras)
 	a.mux.HandleFunc("POST /api/cameras", a.handleAddCamera)
 	a.mux.HandleFunc("DELETE /api/cameras/{id}", a.handleDeleteCamera)
+	a.mux.HandleFunc("PUT /api/cameras/{id}/name", a.handleCameraName)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/recording", a.handleRecordingSettings)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/person-recording", a.handlePersonRecordingSettings)
 	a.mux.HandleFunc("PUT /api/cameras/{id}/retention", a.handleRetentionSettings)

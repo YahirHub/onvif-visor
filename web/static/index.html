@@ -157,6 +157,9 @@
                 </div>
                 <div class="camera-settings-overview-copy">
                   <strong id="cameraSettingsDeviceName">Cámara ONVIF</strong>
+                  <label class="field camera-settings-name-field">Nombre
+                    <input id="cameraSettingsName" type="text" maxlength="80" autocomplete="off">
+                  </label>
                   <span id="cameraSettingsEndpoint" class="mono"></span>
                   <p>Todos los modos usan el mismo stream y el mismo grabador; nunca se crean dos archivos simultáneos para la misma cámara.</p>
                 </div>
@@ -361,10 +364,10 @@
                 </div>
                 <div id="recordingList" class="recording-grid"></div>
                 <nav id="recordingPagination" class="recording-pagination" aria-label="Páginas de grabaciones" hidden>
-                  <a id="recordingPagePrev" class="button ghost compact-button recording-page-link" href="#">← Anterior</a>
+                  <a id="recordingPagePrev" class="button ghost recording-page-link recording-page-arrow" href="#" aria-label="Página anterior" title="Página anterior">&lt;</a>
                   <div id="recordingPageNumbers" class="recording-page-numbers"></div>
                   <span id="recordingPageStatus" class="recording-page-status" aria-live="polite"></span>
-                  <a id="recordingPageNext" class="button ghost compact-button recording-page-link" href="#">Siguiente →</a>
+                  <a id="recordingPageNext" class="button ghost recording-page-link recording-page-arrow" href="#" aria-label="Página siguiente" title="Página siguiente">&gt;</a>
                 </nav>
 
                 <div class="recording-retention-bar">
@@ -385,6 +388,7 @@
                     </div>
                   </div>
                   <div class="recording-retention-actions">
+                    <button id="recordingsDeleteWithoutPersonsBtn" class="button danger" type="button" title="Elimina solo clips analizados donde no se detectó ninguna persona">Sin personas</button>
                     <button id="recordingsDeleteFilteredBtn" class="button danger" type="button">Eliminar filtrados</button>
                     <button id="recordingsDeleteAllBtn" class="button danger-solid" type="button">Eliminar todos</button>
                   </div>

@@ -176,6 +176,10 @@ func (m *Manager) ObjectSegmentsForRecording(ctx context.Context, cameraID, reco
 	return m.store.ObjectSegmentsForRecording(ctx, cameraID, recordingName)
 }
 
+func (m *Manager) RecordingPersonStates(ctx context.Context, cameraID string) (map[string]bool, map[string]bool, error) {
+	return m.store.RecordingPersonStates(ctx, cameraID)
+}
+
 func (m *Manager) SmartEvents(ctx context.Context, cameraID string, from, to time.Time) ([]SmartEvent, error) {
 	return m.store.SmartEvents(ctx, cameraID, from, to)
 }

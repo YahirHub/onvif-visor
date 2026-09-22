@@ -12,16 +12,19 @@ import (
 )
 
 type recordingDeleteBatchRequest struct {
-	CameraID string `json:"camera_id"`
-	All      bool   `json:"all"`
-	From     string `json:"from,omitempty"`
-	To       string `json:"to,omitempty"`
+	CameraID       string `json:"camera_id"`
+	All            bool   `json:"all"`
+	WithoutPersons bool   `json:"without_persons,omitempty"`
+	From           string `json:"from,omitempty"`
+	To             string `json:"to,omitempty"`
 }
 
 type recordingDeleteBatchResponse struct {
-	Deleted       []string `json:"deleted"`
-	DeletedCount  int      `json:"deleted_count"`
-	SkippedActive int      `json:"skipped_active"`
+	Deleted           []string `json:"deleted"`
+	DeletedCount      int      `json:"deleted_count"`
+	SkippedActive     int      `json:"skipped_active"`
+	SkippedPersons    int      `json:"skipped_persons,omitempty"`
+	SkippedUnanalyzed int      `json:"skipped_unanalyzed,omitempty"`
 }
 
 func (a *App) forgetRecordingEvents(cameraID string, names []string) {
@@ -141,6 +144,19 @@ func (a *App) handleDeleteRecordingsBatch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "No se pudieron consultar las grabaciones.")
 		return
 	}
+
+	var analyzed, persons map[string]bool
+	if req.WithoutPersons {
+		if a.analytics == nil {
+			writeError(w, http.StatusServiceUnavailable, "La analítica debe estar disponible para eliminar videos sin personas.")
+			return
+		}
+		analyzed, persons, err = a.analytics.RecordingPersonStates(r.Context(), req.CameraID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "No se pudo comprobar qué videos contienen personas.")
+			return
+		}
+	}
 	result := recordingDeleteBatchResponse{Deleted: make([]string, 0)}
 	for _, file := range files {
 		if !req.All && (file.StartedAt.Before(from) || !file.StartedAt.Before(to)) {
@@ -149,6 +165,16 @@ func (a *App) handleDeleteRecordingsBatch(w http.ResponseWriter, r *http.Request
 		if file.Active {
 			result.SkippedActive++
 			continue
+		}
+		if req.WithoutPersons {
+			if !analyzed[file.Name] {
+				result.SkippedUnanalyzed++
+				continue
+			}
+			if persons[file.Name] {
+				result.SkippedPersons++
+				continue
+			}
 		}
 		if err := a.deleteRecordingArtifacts(r.Context(), req.CameraID, file.Name); err != nil {
 			if errors.Is(err, media.ErrRecordingActive) {
@@ -165,7 +191,7 @@ func (a *App) handleDeleteRecordingsBatch(w http.ResponseWriter, r *http.Request
 	}
 	result.DeletedCount = len(result.Deleted)
 	if session, ok := currentSession(r); ok {
-		log.Printf("recording_delete_batch user=%s camera=%s deleted=%d skipped_active=%d all=%t", session.Username, req.CameraID, result.DeletedCount, result.SkippedActive, req.All)
+		log.Printf("recording_delete_batch user=%s camera=%s deleted=%d skipped_active=%d skipped_persons=%d skipped_unanalyzed=%d all=%t without_persons=%t", session.Username, req.CameraID, result.DeletedCount, result.SkippedActive, result.SkippedPersons, result.SkippedUnanalyzed, req.All, req.WithoutPersons)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

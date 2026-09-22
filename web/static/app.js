@@ -749,6 +749,7 @@ async function loadCameraSettingsView() {
 
   $('#cameraSettingsID').value = camera.id;
   $('#cameraSettingsTitle').textContent = camera.name;
+  $('#cameraSettingsName').value = camera.name;
   $('#cameraSettingsDeviceName').textContent = [camera.manufacturer, camera.model].filter(Boolean).join(' · ') || camera.name;
   $('#cameraSettingsEndpoint').textContent = camera.endpoint || '';
   $('#cameraSettingsMeta').textContent = [camera.profile_name, camera.events_supported ? 'Eventos ONVIF' : 'Sin eventos ONVIF'].filter(Boolean).join(' · ');
@@ -804,6 +805,7 @@ async function saveCameraSettings(event) {
   const errorBox = $('#cameraSettingsError');
   const message = $('#cameraSettingsMessage');
   const button = $('#cameraSettingsSave');
+  const cameraName = $('#cameraSettingsName').value.trim();
   const postRoll = Number($('#cameraSettingsPostRoll').value);
   const retentionPercent = Number($('#cameraSettingsRetentionPercent').value);
   const mode = $('#cameraSettingsMode').value;
@@ -817,6 +819,14 @@ async function saveCameraSettings(event) {
 
   errorBox.textContent = '';
   message.textContent = '';
+  if (!cameraName) {
+    errorBox.textContent = 'Escribe un nombre para la cámara.';
+    return;
+  }
+  if ([...cameraName].length > 80) {
+    errorBox.textContent = 'El nombre no puede superar 80 caracteres.';
+    return;
+  }
   if (!Number.isFinite(postRoll) || postRoll < 1 || postRoll > 600) {
     errorBox.textContent = 'El post-roll debe estar entre 1 y 600 segundos.';
     return;
@@ -838,6 +848,10 @@ async function saveCameraSettings(event) {
       body: JSON.stringify({ enabled: $('#cameraSettingsPersonRecording').checked }),
     });
     await Promise.all([
+      api('/api/cameras/' + encodeURIComponent(cameraID) + '/name', {
+        method: 'PUT',
+        body: JSON.stringify({ name: cameraName }),
+      }),
       api('/api/cameras/' + encodeURIComponent(cameraID) + '/recording', {
         method: 'PUT',
         body: JSON.stringify({
@@ -859,7 +873,7 @@ async function saveCameraSettings(event) {
     ]);
     state.cameras = await api('/api/cameras') || [];
     renderCameras();
-    setStatus('Configuración actualizada en ' + camera.name, true);
+    setStatus('Configuración actualizada en ' + cameraName, true);
     await loadCameraSettingsView();
     $('#cameraSettingsMessage').textContent = 'Configuración guardada';
   } catch (error) {
@@ -1527,12 +1541,15 @@ function syncRecordingDeleteScope() {
 
 function updateRecordingDeleteAction() {
   const button = $('#recordingsDeleteFilteredBtn');
+  const noPersonsButton = $('#recordingsDeleteWithoutPersonsBtn');
   const allButton = $('#recordingsDeleteAllBtn');
-  if (!button || !allButton) return;
+  if (!button || !noPersonsButton || !allButton) return;
   const filter = recordingDeleteFilter();
   const total = Math.max(0, Number(recordingSummary(state.recordingCameraID)?.count) || 0);
-  button.disabled = !state.recordingCameraID || !filter || total === 0;
+  const disabled = !state.recordingCameraID || !filter || total === 0;
+  button.disabled = disabled;
   button.textContent = 'Eliminar filtrados';
+  noPersonsButton.disabled = disabled;
   allButton.disabled = !state.recordingCameraID || total === 0;
   allButton.textContent = total > 0 ? 'Eliminar todos (' + total + ')' : 'Eliminar todos';
 }
@@ -1566,7 +1583,7 @@ async function deleteCurrentRecording() {
   }
 }
 
-async function deleteRecordingsByFilter(filter, button) {
+async function deleteRecordingsByFilter(filter, button, { withoutPersons = false } = {}) {
   const total = Math.max(0, Number(recordingSummary(state.recordingCameraID)?.count) || 0);
   if (!filter || !total) {
     setStatus('No hay grabaciones que coincidan con ese filtro.', false);
@@ -1574,20 +1591,28 @@ async function deleteRecordingsByFilter(filter, button) {
   }
   const camera = state.cameras.find(item => item.id === state.recordingCameraID);
   const accepted = await confirmAction({
-    title: filter.all ? 'Eliminar todas las grabaciones' : 'Eliminar grabaciones filtradas',
-    message: 'Se eliminarán permanentemente los clips cerrados de ' + (camera?.name || 'esta cámara') + ' correspondientes a ' + filter.label + '. Esta acción no se puede deshacer.',
-    confirmLabel: 'Eliminar videos',
+    title: withoutPersons ? 'Eliminar videos sin personas' : (filter.all ? 'Eliminar todas las grabaciones' : 'Eliminar grabaciones filtradas'),
+    message: withoutPersons
+      ? 'Se eliminarán permanentemente los clips cerrados y ya analizados de ' + (camera?.name || 'esta cámara') + ' correspondientes a ' + filter.label + ' donde NanoDet no detectó personas. Los clips con personas o pendientes de análisis se conservarán.'
+      : 'Se eliminarán permanentemente los clips cerrados de ' + (camera?.name || 'esta cámara') + ' correspondientes a ' + filter.label + '. Esta acción no se puede deshacer.',
+    confirmLabel: withoutPersons ? 'Eliminar sin personas' : 'Eliminar videos',
   });
   if (!accepted) return;
 
   button.disabled = true;
   try {
     const payload = filter.all
-      ? { camera_id: state.recordingCameraID, all: true }
-      : { camera_id: state.recordingCameraID, all: false, from: filter.from.toISOString(), to: filter.to.toISOString() };
+      ? { camera_id: state.recordingCameraID, all: true, without_persons: withoutPersons }
+      : { camera_id: state.recordingCameraID, all: false, without_persons: withoutPersons, from: filter.from.toISOString(), to: filter.to.toISOString() };
     const result = await api('/api/recordings/delete-batch', { method: 'POST', body: JSON.stringify(payload) });
     const skipped = Number(result.skipped_active) || 0;
-    const suffix = skipped ? ' · ' + skipped + ' activa' + (skipped === 1 ? '' : 's') + ' conservada' + (skipped === 1 ? '' : 's') : '';
+    const withPersons = Number(result.skipped_persons) || 0;
+    const unanalyzed = Number(result.skipped_unanalyzed) || 0;
+    const suffixParts = [];
+    if (skipped) suffixParts.push(skipped + ' activa' + (skipped === 1 ? '' : 's') + ' conservada' + (skipped === 1 ? '' : 's'));
+    if (withoutPersons && withPersons) suffixParts.push(withPersons + ' con persona' + (withPersons === 1 ? '' : 's') + ' conservada' + (withPersons === 1 ? '' : 's'));
+    if (withoutPersons && unanalyzed) suffixParts.push(unanalyzed + ' pendiente' + (unanalyzed === 1 ? '' : 's') + ' de análisis conservada' + (unanalyzed === 1 ? '' : 's'));
+    const suffix = suffixParts.length ? ' · ' + suffixParts.join(' · ') : '';
     await loadRecordings();
     refreshEvents(false);
     setStatus((result.deleted_count || 0) + ' grabaciones eliminadas' + suffix, true);
@@ -1600,6 +1625,10 @@ async function deleteRecordingsByFilter(filter, button) {
 
 async function deleteFilteredRecordings() {
   await deleteRecordingsByFilter(recordingDeleteFilter(), $('#recordingsDeleteFilteredBtn'));
+}
+
+async function deleteWithoutPersonRecordings() {
+  await deleteRecordingsByFilter(recordingDeleteFilter(), $('#recordingsDeleteWithoutPersonsBtn'), { withoutPersons: true });
 }
 
 async function deleteAllRecordings() {
@@ -1927,11 +1956,12 @@ function renderObjectTimeline(recordings) {
       marker.style.left = `${geometry.left}%`;
       marker.style.width = `${geometry.width}%`;
       const confidence = Math.round((Number(segment.max_confidence) || 0) * 100);
-      const moment = new Date(recordingStart + (Number(segment.peak_seconds) || 0) * 1000);
+      const jumpOffset = isPerson ? personSegmentStart(segment) : Math.max(0, Number(segment.peak_seconds) || 0);
+      const moment = new Date(recordingStart + jumpOffset * 1000);
       const title = `${isPerson ? 'Persona' : analyticsClassLabel(className)} · ${moment.toLocaleTimeString()} · ${confidence}%`;
       marker.title = title;
       marker.setAttribute('aria-label', `Abrir ${title}`);
-      marker.addEventListener('click', () => selectRecording(recording, Number(segment.peak_seconds) || 0));
+      marker.addEventListener('click', () => selectRecording(recording, jumpOffset));
       timeline.append(marker);
     }
 
@@ -1963,6 +1993,10 @@ function renderRecordingDayAction() {
     button.textContent = recording.active ? 'Abrir archivo de hoy' : 'Abrir archivo del día';
     button.title = 'Abrir el archivo más largo guardado para la fecha seleccionada';
   }
+}
+
+function personSegmentStart(segment) {
+  return Math.max(0, Number(segment?.start_seconds) || 0);
 }
 
 function bestPersonSegmentForRecording(recording) {
@@ -2081,8 +2115,8 @@ function renderRecordingCards(recordings) {
       jumpPerson.type = 'button';
       jumpPerson.className = 'recording-card-action person';
       jumpPerson.textContent = 'Ir a persona';
-      jumpPerson.title = 'Saltar a la detección de persona con mejor puntuación';
-      jumpPerson.addEventListener('click', () => selectRecording(recording, Number(personSegment.peak_seconds) || 0));
+      jumpPerson.title = 'Saltar al inicio de la detección de persona';
+      jumpPerson.addEventListener('click', () => selectRecording(recording, personSegmentStart(personSegment)));
       actions.append(jumpPerson);
     }
 
@@ -2256,6 +2290,28 @@ async function loadPlaybackPersonMarkers(recording) {
   }
 }
 
+function snapPlaybackOffsetToPerson(offset) {
+  const recording = state.playback.recording;
+  const scrubber = $('#recordingScrubber');
+  const duration = Math.max(0, Number(recording?.duration_seconds) || 0);
+  const width = Math.max(1, scrubber?.getBoundingClientRect().width || 0);
+  if (!recording || duration <= 0 || !state.playbackPersonSegments.length || width <= 1) return offset;
+
+  const targetX = Math.max(0, Math.min(1, offset / duration)) * width;
+  let nearest = null;
+  let nearestPixels = Infinity;
+  for (const segment of state.playbackPersonSegments) {
+    const start = Math.max(0, Math.min(duration, personSegmentStart(segment)));
+    const segmentX = start / duration * width;
+    const distance = Math.abs(segmentX - targetX);
+    if (distance < nearestPixels) {
+      nearestPixels = distance;
+      nearest = start;
+    }
+  }
+  return nearest !== null && nearestPixels <= 14 ? nearest : offset;
+}
+
 function renderPlaybackPersonMarkers(recording) {
   const box = $('#recordingDetectionMarkers');
   const legend = $('#recordingDetectionLegend');
@@ -2267,14 +2323,14 @@ function renderPlaybackPersonMarkers(recording) {
   if (duration <= 0) return;
 
   for (const segment of state.playbackPersonSegments) {
-    const offset = Math.max(0, Math.min(duration, Number(segment.peak_seconds) || 0));
+    const offset = Math.max(0, Math.min(duration, personSegmentStart(segment)));
     const marker = document.createElement('button');
     marker.type = 'button';
     marker.className = 'recording-detection-marker';
     marker.style.left = String(Math.max(0, Math.min(100, offset / duration * 100))) + '%';
     const confidence = Math.round((Number(segment.max_confidence) || 0) * 100);
-    marker.title = 'Persona · ' + formatClock(offset) + ' · ' + confidence + '%';
-    marker.setAttribute('aria-label', 'Ir a detección de persona en ' + formatClock(offset));
+    marker.title = 'Inicio de persona · ' + formatClock(offset) + ' · ' + confidence + '%';
+    marker.setAttribute('aria-label', 'Ir al inicio de la detección de persona en ' + formatClock(offset));
     marker.addEventListener('click', () => {
       state.playbackRouteOffset = offset;
       setBrowserRoute(recordingPlaybackPath(recording.camera_id, recording.name, offset), { replace: true });
@@ -3637,6 +3693,7 @@ pickerSearch.addEventListener('input', renderPicker);
 $('#recordingsRefreshBtn').addEventListener('click', loadRecordings);
 $('#analyticsReindexBtn').addEventListener('click', reindexAnalytics);
 $('#recordingDeleteBtn').addEventListener('click', deleteCurrentRecording);
+$('#recordingsDeleteWithoutPersonsBtn').addEventListener('click', deleteWithoutPersonRecordings);
 $('#recordingsDeleteFilteredBtn').addEventListener('click', deleteFilteredRecordings);
 $('#recordingsDeleteAllBtn').addEventListener('click', deleteAllRecordings);
 $('#recordingDeleteScope').addEventListener('change', syncRecordingDeleteScope);
@@ -3699,7 +3756,11 @@ $('#recordingScrubber').addEventListener('input', (event) => {
 $('#recordingScrubber').addEventListener('change', (event) => {
   const recording = state.playback.recording;
   if (!recording) return;
-  const offset = Number(event.target.value) || 0;
+  const rawOffset = Number(event.target.value) || 0;
+  const offset = snapPlaybackOffsetToPerson(rawOffset);
+  event.target.value = String(offset);
+  state.playbackRouteOffset = offset;
+  setBrowserRoute(recordingPlaybackPath(recording.camera_id, recording.name, offset), { replace: true });
   const wasPlaying = state.playback.playing;
   if (wasPlaying) {
     startRecordingPlayback(recording, offset);

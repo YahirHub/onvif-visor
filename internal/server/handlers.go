@@ -101,6 +101,36 @@ func (a *App) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *App) handleCameraName(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "solicitud inválida")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "el nombre de la cámara es obligatorio")
+		return
+	}
+	if len([]rune(name)) > 80 {
+		writeError(w, http.StatusBadRequest, "el nombre de la cámara no puede superar 80 caracteres")
+		return
+	}
+	cam, err := a.store.SetName(id, name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "cámara no encontrada")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "no se pudo actualizar el nombre de la cámara")
+		return
+	}
+	writeJSON(w, http.StatusOK, cam)
+}
+
 func (a *App) handleRecordingSettings(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {

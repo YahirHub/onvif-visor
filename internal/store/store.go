@@ -300,6 +300,23 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
+func (s *Store) SetName(id, name string) (Camera, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cam, ok := s.cameras[id]
+	if !ok {
+		return Camera{}, ErrNotFound
+	}
+	cam.Name = name
+	cam.UpdatedAt = time.Now().UTC()
+	s.cameras[id] = cam
+	if err := s.saveLocked(); err != nil {
+		return Camera{}, err
+	}
+	cam.Password = ""
+	return cam, nil
+}
+
 func (s *Store) SetRecording(id string, enabled bool, postRollSeconds int) (Camera, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

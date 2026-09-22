@@ -120,6 +120,52 @@ SELECT id, camera_id, recording_name, class_id, class_name, start_seconds, end_s
 FROM object_segments WHERE camera_id=? ORDER BY recording_name DESC, start_seconds ASC, class_id ASC`, cameraID)
 }
 
+func (s *Store) RecordingPersonStates(ctx context.Context, cameraID string) (map[string]bool, map[string]bool, error) {
+	complete := make(map[string]bool)
+	persons := make(map[string]bool)
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT recording_name
+FROM recording_analysis
+WHERE camera_id=? AND status='complete' AND model=?`, cameraID, AnalysisModelKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query completed recording analysis: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		complete[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	rows.Close()
+
+	rows, err = s.db.QueryContext(ctx, `
+SELECT DISTINCT recording_name
+FROM object_segments
+WHERE camera_id=? AND class_name='person'`, cameraID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query person recording index: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, nil, err
+		}
+		persons[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return complete, persons, nil
+}
+
 func (s *Store) ObjectSegmentsForRecording(ctx context.Context, cameraID, recordingName string) ([]ObjectSegment, error) {
 	return s.queryObjectSegments(ctx, `
 SELECT id, camera_id, recording_name, class_id, class_name, start_seconds, end_seconds, peak_seconds, max_confidence, best_score, source
