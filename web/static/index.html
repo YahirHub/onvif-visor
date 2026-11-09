@@ -301,31 +301,36 @@
               <div id="recordingsWorkspace" hidden>
                 <div class="recording-summary-bar">
                   <div><h2 id="recordingCameraTitle">Grabaciones</h2></div>
+                  <button id="recordingsSummaryToggle" class="button ghost compact-button" type="button" aria-expanded="false" aria-controls="recordingsSummaryBody">Resumen del día</button>
+                </div>
+
+                <div id="recordingsSummaryBody" class="recordings-summary-body" hidden>
                   <div class="recording-stats">
                     <div><strong id="recordingCount">0</strong><span>archivos</span></div>
                     <div><strong id="recordingSize">0 MB</strong><span>esta cámara</span></div>
                     <div><strong id="recordingStorageTotal">0 B</strong><span id="recordingStorageMeta">total guardado</span></div>
                     <div><strong id="recordingDuration">0 min</strong><span>vídeo</span></div>
                   </div>
+                  <section id="analyticsDailySummary" class="analytics-daily-summary" aria-live="polite">
+                    <div class="analytics-summary-head">
+                      <strong id="analyticsSummaryTitle">Actividad inteligente</strong>
+                      <span id="analyticsSummaryStatus" class="analytics-status">Cargando…</span>
+                    </div>
+                    <div id="analyticsSummaryGrid" class="analytics-summary-grid"></div>
+                    <div id="analyticsSummaryClasses" class="analytics-summary-classes"></div>
+                    <div class="recordings-summary-actions">
+                      <button id="recordingOpenDayBtn" class="button secondary compact-button" type="button" hidden>Abrir archivo del día</button>
+                      <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
+                    </div>
+                  </section>
                 </div>
-
-                <section id="analyticsDailySummary" class="analytics-daily-summary" aria-live="polite">
-                  <div class="analytics-summary-head">
-                    <div><p class="eyebrow">RESUMEN DEL DÍA</p><strong id="analyticsSummaryTitle">Actividad inteligente</strong></div>
-                    <span id="analyticsSummaryStatus" class="analytics-status">Cargando…</span>
-                  </div>
-                  <div id="analyticsSummaryGrid" class="analytics-summary-grid"></div>
-                  <div id="analyticsSummaryClasses" class="analytics-summary-classes"></div>
-                </section>
 
                 <section id="recordingTimelinePanel" class="timeline-panel timeline-compact">
                   <div class="timeline-head">
-                    <div><h3>Línea de tiempo inteligente</h3><p>Vista rápida de grabación y personas. Expande solo cuando necesites más detalle.</p></div>
+                    <div><h3>Línea de tiempo</h3><p>Grabación y personas del día.</p></div>
                     <div class="timeline-head-actions">
                       <span id="analyticsStatus" class="analytics-status">Analítica…</span>
-                      <button id="recordingOpenDayBtn" class="button secondary compact-button" type="button" hidden>Abrir archivo del día</button>
                       <button id="timelineDetailsBtn" class="button ghost compact-button timeline-details-button" type="button" aria-expanded="false">Ver todas las clases</button>
-                      <button id="analyticsReindexBtn" class="button ghost compact-button" type="button">Reanalizar</button>
                       <div class="timeline-zoom-controls" role="group" aria-label="Zoom de la línea de tiempo">
                         <button id="timelineZoomOutBtn" class="icon-button timeline-zoom-button" type="button" aria-label="Alejar línea de tiempo" title="Alejar"><i data-lucide="minus" aria-hidden="true">−</i></button>
                         <button id="timelineZoomResetBtn" class="timeline-zoom-reset" type="button" title="Restablecer a 24 horas"><span id="timelineZoomLabel">24 h</span></button>
@@ -347,12 +352,11 @@
                     </div>
                   </div>
                   <p id="timelineActivityHint" class="timeline-activity-hint">Cargando detecciones de persona…</p>
-                  <p class="timeline-gesture-hint">Pellizca para ampliar · Ctrl + rueda para zoom · arrastra para recorrer el día.</p>
                   <p id="timelineEmpty" class="timeline-empty" hidden>No hay clips en esta fecha.</p>
                 </section>
 
                 <div class="section-toolbar recording-list-head">
-                  <div><h2>Archivos</h2><p id="recordingListMeta">0 grabaciones</p></div>
+                  <div><h2 id="recordingListTitle">Archivos</h2><p id="recordingListMeta">0 grabaciones</p></div>
                   <button id="recordingsRefreshBtn" class="button ghost compact-button icon-only-button" type="button" title="Actualizar" aria-label="Actualizar"><i data-lucide="refresh-cw" aria-hidden="true">↻</i></button>
                 </div>
                 <div id="recordingList" class="recording-grid"></div>

@@ -1046,6 +1046,11 @@ select:focus { border-color: rgba(80,208,173,.55); box-shadow: 0 0 0 3px rgba(80
 
 /* Visión inteligente multiclase */
 .recording-object-badge { position: absolute; top: .45rem; right: .45rem; max-width: calc(100% - .9rem); overflow: hidden; padding: .2rem .36rem; border-radius: 6px; background: rgba(31,111,78,.9); color: #e7fff1; font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
+.recordings-summary-body { display: grid; gap: .55rem; margin-bottom: .7rem; }
+.recordings-summary-body[hidden] { display: none; }
+.recordings-summary-body .recording-stats { display: flex; gap: 1.4rem; flex-wrap: wrap; padding: .15rem .2rem 0; }
+.recordings-summary-body .analytics-daily-summary { margin: 0; }
+.recordings-summary-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 .analytics-daily-summary { display: grid; gap: .55rem; margin: 0 0 .7rem; padding: .7rem; border: 1px solid rgba(148,163,184,.08); border-radius: 8px; background: #0b1015; }
 .analytics-summary-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
 .analytics-summary-head .eyebrow { margin-bottom: .08rem; }

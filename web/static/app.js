@@ -2112,6 +2112,16 @@ function renderRecordingCards(recordings) {
   $('#recordingListMeta').textContent = page.total
     ? first + '–' + last + ' de ' + page.total + ' en ' + state.recordingDate
     : '0 grabaciones en ' + state.recordingDate;
+  const dayTitle = $('#recordingListTitle');
+  if (dayTitle) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    dayTitle.textContent = state.recordingDate === localDateKey(new Date())
+      ? 'Hoy'
+      : state.recordingDate === localDateKey(yesterday)
+        ? 'Ayer'
+        : new Date(`${state.recordingDate}T12:00:00`).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+  }
 
   if (!recordings.length) {
     const empty = document.createElement('div');
@@ -2174,7 +2184,11 @@ function renderRecordingCards(recordings) {
     body.className = 'recording-card-body';
     const title = document.createElement('h3');
     title.className = 'recording-card-title';
-    title.textContent = new Date(recording.started_at).toLocaleString();
+    const startedAt = new Date(recording.started_at);
+    const endedAt = new Date(startedAt.getTime() + (Number(recording.duration_seconds) || 0) * 1000);
+    const timeFormat = { hour: '2-digit', minute: '2-digit' };
+    title.textContent = `${startedAt.toLocaleTimeString([], timeFormat)} – ${endedAt.toLocaleTimeString([], timeFormat)}`;
+    title.title = startedAt.toLocaleString();
     const meta = document.createElement('div');
     meta.className = 'recording-card-meta';
     const duration = document.createElement('span');
@@ -2185,13 +2199,6 @@ function renderRecordingCards(recordings) {
 
     const actions = document.createElement('div');
     actions.className = 'recording-card-actions';
-    const openFile = document.createElement('button');
-    openFile.type = 'button';
-    openFile.className = 'recording-card-action';
-    openFile.textContent = 'Abrir archivo';
-    openFile.addEventListener('click', () => selectRecording(recording, 0));
-    actions.append(openFile);
-
     const personSegment = bestPersonSegmentForRecording(recording);
     if (personSegment) {
       const jumpPerson = document.createElement('button');
@@ -2203,7 +2210,8 @@ function renderRecordingCards(recordings) {
       actions.append(jumpPerson);
     }
 
-    body.append(title, meta, actions);
+    body.append(title, meta);
+    if (actions.childElementCount) body.append(actions);
     card.append(preview, body);
     list.append(card);
   }
@@ -3835,6 +3843,22 @@ $('#refreshSnapshotsBtn').addEventListener('click', () => {
 });
 cameraSearch.addEventListener('input', renderCameras);
 pickerSearch.addEventListener('input', renderPicker);
+const recordingsSummaryBody = $('#recordingsSummaryBody');
+const recordingsSummaryToggle = $('#recordingsSummaryToggle');
+if (recordingsSummaryBody && recordingsSummaryToggle) {
+  let summaryOpen = false;
+  try { summaryOpen = localStorage.getItem('onvif.recordings.summaryOpen') === '1'; } catch (_) {}
+  const applySummary = (open) => {
+    recordingsSummaryBody.hidden = !open;
+    recordingsSummaryToggle.setAttribute('aria-expanded', String(open));
+  };
+  applySummary(summaryOpen);
+  recordingsSummaryToggle.addEventListener('click', () => {
+    summaryOpen = recordingsSummaryBody.hidden;
+    applySummary(summaryOpen);
+    try { localStorage.setItem('onvif.recordings.summaryOpen', summaryOpen ? '1' : '0'); } catch (_) {}
+  });
+}
 $('#recordingsRefreshBtn').addEventListener('click', loadRecordings);
 $('#analyticsReindexBtn').addEventListener('click', reindexAnalytics);
 $('#recordingDeleteBtn').addEventListener('click', deleteCurrentRecording);
