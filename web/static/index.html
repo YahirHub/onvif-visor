@@ -246,6 +246,7 @@
               <button id="monitorFullscreenBtn" class="button ghost icon-only-button" type="button" title="Pantalla completa" aria-label="Pantalla completa"><i data-lucide="maximize-2" aria-hidden="true">⛶</i></button>
               <button id="singleViewBtn" class="button ghost" type="button">1 cámara</button>
               <button id="togglePickerBtn" class="button secondary" type="button">Cámaras</button>
+              <button id="monitorOptionsBtn" class="button ghost icon-only-button" type="button" title="Opciones de multivista" aria-label="Opciones de multivista"><i data-lucide="sliders-horizontal" aria-hidden="true">⚙</i></button>
             </div>
           </div>
 
@@ -257,6 +258,8 @@
                 <p>Selecciona hasta 9 cámaras.</p>
                 <button id="monitorEmptyAddBtn" class="button primary" type="button">Elegir cámaras</button>
               </div>
+              <div id="monitorFocusHint" class="focus-hint" hidden>Pulsa Esc para ver todas las cámaras</div>
+              <button id="monitorExitFocusBtn" class="focus-exit-button" type="button" hidden><i data-lucide="layout-grid" aria-hidden="true"></i><span>Ver todas</span></button>
             </div>
 
             <aside id="monitorPicker" class="monitor-picker" aria-label="Seleccionar cámaras">
@@ -269,6 +272,13 @@
                 <input id="pickerSearch" type="search" placeholder="Buscar…" autocomplete="off">
               </div>
               <div id="pickerList" class="picker-list"></div>
+              <div class="picker-options">
+                <div class="picker-options-head"><i data-lucide="sliders-horizontal" aria-hidden="true"></i><strong>Opciones</strong></div>
+                <label class="picker-option">
+                  <input id="monitorKeepBackgroundToggle" type="checkbox">
+                  <span><strong>Segundo plano al ampliar</strong><small>Al ampliar una cámara, las demás siguen en directo en segundo plano. Al salir con Esc vuelven al instante, sin reconectar; gasta más datos y batería.</small></span>
+                </label>
+              </div>
             </aside>
           </div>
         </section>

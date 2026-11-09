@@ -18,6 +18,8 @@ const state = {
   currentView: 'cameras',
   cameraSettingsID: '',
   monitorSelected: [],
+  monitorFocus: null,
+  monitorKeepBackground: false,
   recordingCameraID: '',
   recordingDate: '',
   recordingName: '',
@@ -318,7 +320,9 @@ function stopCameraPolling() {
 function startEventPolling() {
   stopEventPolling();
   eventsTimer = setInterval(() => {
-    if (!appView.hidden && state.auth.authenticated !== false) refreshEvents(false);
+    // Solo se refrescan los eventos cuando su vista está en pantalla: en
+    // segundo plano el sondeo solo gastaba datos y rehacía miniaturas.
+    if (state.currentView === 'events' && !appView.hidden && state.auth.authenticated !== false) refreshEvents(false);
   }, 2500);
 }
 
@@ -397,9 +401,21 @@ async function bootstrap() {
   }
 }
 
+// Preferencias de multivista guardadas en este navegador: la selección de
+// cámaras sobrevive a recargas y cierres, y la opción de segundo plano
+// decide si al ampliar una cámara las demás siguen en directo.
+try {
+  const savedSelection = JSON.parse(localStorage.getItem('onvif.monitor.selected') || '[]');
+  if (Array.isArray(savedSelection)) {
+    state.monitorSelected = savedSelection.filter(id => typeof id === 'string');
+  }
+  state.monitorKeepBackground = localStorage.getItem('onvif.monitor.keepBackground') === '1';
+} catch (_) {}
+
 function navigate(view, { path = '', replace = false, fromHistory = false } = {}) {
   if (!viewMeta[view]) return;
   if (state.currentView === 'monitor' && view !== 'monitor') stopMonitorStreams();
+  if (view !== 'monitor') state.monitorFocus = null;
   if (state.currentView === 'playback' && view !== 'playback') stopRecordingPlayback();
   if (view !== 'monitor') {
     monitorPicker.classList.remove('open');
@@ -954,7 +970,7 @@ function fitMonitorStage() {
   }
   const host = monitorStage.parentElement;
   if (!host) return;
-  const count = Math.max(1, state.monitorSelected.length);
+  const count = Math.max(1, state.monitorFocus ? 1 : state.monitorSelected.length);
   const ratio = monitorCompositeRatio(count);
   const availableWidth = host.clientWidth;
   const availableHeight = host.clientHeight;
@@ -1022,6 +1038,13 @@ function createMonitorPane(camera, lowBandwidth) {
       if (session.required && !session.authenticated) showLogin('Tu sesión terminó. Ingresa de nuevo para continuar.');
     } catch (_) {}
   });
+  pane.addEventListener('click', (event) => {
+    if (event.target.closest('.monitor-remove')) return;
+    if (state.monitorSelected.length > 1 && state.monitorFocus !== camera.id) {
+      state.monitorFocus = camera.id;
+      renderMonitor();
+    }
+  });
   remove.addEventListener('click', () => {
     state.monitorSelected = state.monitorSelected.filter(id => id !== camera.id);
     if (window.location.pathname.startsWith('/camara/') && state.monitorSelected.length !== 1) {
@@ -1041,12 +1064,26 @@ function renderMonitor() {
     .filter(Boolean)
     .slice(0, 9);
   state.monitorSelected = selected.map(camera => camera.id);
+  if (state.monitorFocus && !state.monitorSelected.includes(state.monitorFocus)) {
+    state.monitorFocus = null;
+  }
+  const focused = state.monitorFocus && selected.length > 1
+    ? selected.find(camera => camera.id === state.monitorFocus)
+    : null;
 
   monitorStage.className = `monitor-stage ${monitorLayoutClass(selected.length)}`;
+  monitorStage.classList.toggle('has-focus', Boolean(focused));
+  monitorStage.classList.toggle('is-multi', selected.length > 1);
   monitorEmpty.hidden = selected.length > 0;
-  $('#monitorMeta').textContent = `${selected.length} ${selected.length === 1 ? 'cámara activa' : 'cámaras activas'}`;
-  $('#monitorTitle').textContent = selected.length === 1 ? selected[0].name : 'Multivista';
+  $('#monitorMeta').textContent = focused
+    ? 'Vista única · Esc para ver todas'
+    : `${selected.length} ${selected.length === 1 ? 'cámara activa' : 'cámaras activas'}`;
+  $('#monitorTitle').textContent = focused
+    ? focused.name
+    : (selected.length === 1 ? selected[0].name : 'Multivista');
   $('#singleViewBtn').disabled = selected.length <= 1;
+  $('#monitorExitFocusBtn').hidden = !focused;
+  $('#monitorFocusHint').hidden = !focused;
 
   const wanted = new Set(selected.map(camera => camera.id));
   for (const pane of $$('.monitor-pane', monitorStage)) {
@@ -1068,10 +1105,33 @@ function renderMonitor() {
     monitorStage.append(pane);
   }
 
+  // Con una cámara en foco, las demás se pausan (sin imagen) salvo que la
+  // preferencia de segundo plano esté activa: entonces siguen en directo
+  // aunque no se vean, y al salir del foco la rejilla vuelve al instante.
+  for (const pane of $$('.monitor-pane', monitorStage)) {
+    const isFocused = Boolean(focused) && pane.dataset.cameraId === focused.id;
+    pane.classList.toggle('is-focused', isFocused);
+    const image = $('.monitor-live-image', pane);
+    if (!image) continue;
+    const shouldLive = !focused || isFocused || state.monitorKeepBackground;
+    if (shouldLive && !image.getAttribute('src')) {
+      const loading = $('.monitor-pane-loading', pane);
+      if (loading) loading.hidden = false;
+      image.src = `/api/cameras/${encodeURIComponent(pane.dataset.cameraId)}/live?t=${Date.now()}${lowBandwidth ? '&quality=low' : ''}`;
+    } else if (!shouldLive && image.getAttribute('src')) {
+      image.removeAttribute('src');
+    }
+  }
+
+  try {
+    localStorage.setItem('onvif.monitor.selected', JSON.stringify(state.monitorSelected));
+  } catch (_) {}
+
   renderPicker();
   refreshIcons();
   requestAnimationFrame(fitMonitorStage);
 }
+
 
 function renderPicker() {
   if (!pickerList) return;
@@ -1079,6 +1139,8 @@ function renderPicker() {
   const cameras = state.cameras.filter(camera => cameraMatches(camera, query));
   pickerList.replaceChildren();
   $('#pickerCount').textContent = `${state.monitorSelected.length} / 9 seleccionadas`;
+  const keepToggle = $('#monitorKeepBackgroundToggle');
+  if (keepToggle) keepToggle.checked = state.monitorKeepBackground;
 
   for (const camera of cameras) {
     const label = document.createElement('label');
@@ -2554,6 +2616,11 @@ function eventThumbnailFingerprint(event) {
 function loadEventThumbnail(image, event) {
   let attempt = 0;
   const finishLoading = () => image.closest('.event-thumb')?.classList.remove('loading');
+  // La ola de carga tiene fecha de caducidad: extraer el fotograma puede
+  // tardar en el teléfono, y sin límite la animación barría para siempre.
+  // A los 8 s se quita; la imagen aparecerá cuando llegue, ya sin ola.
+  const deadline = setTimeout(finishLoading, 8000);
+  image.addEventListener('load', () => clearTimeout(deadline), { once: true });
   const fallback = () => {
     image.onerror = finishLoading;
     image.src = eventCameraSnapshotURL(event);
@@ -2566,7 +2633,7 @@ function loadEventThumbnail(image, event) {
     image.src = eventRecordingSnapshotURL(event, attempt);
   };
   image.onerror = () => {
-    if (attempt < 3 && image.isConnected) {
+    if (attempt < 1 && image.isConnected) {
       attempt += 1;
       setTimeout(load, 1400);
       return;
@@ -3741,6 +3808,24 @@ $('#singleViewBtn').addEventListener('click', () => {
   if (cameraID) navigate('monitor', { path: `/camara/${encodeURIComponent(cameraID)}`, replace: true });
 });
 $('#togglePickerBtn').addEventListener('click', () => monitorPicker.classList.toggle('open'));
+$('#monitorOptionsBtn').addEventListener('click', () => monitorPicker.classList.toggle('open'));
+$('#monitorExitFocusBtn').addEventListener('click', () => {
+  state.monitorFocus = null;
+  renderMonitor();
+});
+$('#monitorKeepBackgroundToggle').addEventListener('change', (event) => {
+  state.monitorKeepBackground = event.target.checked;
+  try {
+    localStorage.setItem('onvif.monitor.keepBackground', state.monitorKeepBackground ? '1' : '0');
+  } catch (_) {}
+  if (state.currentView === 'monitor') renderMonitor();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.currentView === 'monitor' && state.monitorFocus) {
+    state.monitorFocus = null;
+    renderMonitor();
+  }
+});
 $('#closePickerBtn').addEventListener('click', () => monitorPicker.classList.remove('open'));
 $('#monitorEmptyAddBtn').addEventListener('click', () => monitorPicker.classList.add('open'));
 $('#refreshSnapshotsBtn').addEventListener('click', () => {
