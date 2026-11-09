@@ -2372,7 +2372,34 @@ function backToRecordingLibrary() {
   });
 }
 
+function freezePlaybackFrame() {
+  const image = $('#recordingPlaybackImage');
+  const poster = $('#recordingPlaybackPoster');
+  if (!image || !poster || !image.naturalWidth) return false;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    canvas.getContext('2d').drawImage(image, 0, 0);
+    poster.src = canvas.toDataURL('image/jpeg', .85);
+    poster.hidden = false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function clearPlaybackPoster() {
+  const poster = $('#recordingPlaybackPoster');
+  if (!poster) return;
+  poster.hidden = true;
+  poster.removeAttribute('src');
+}
+
 function startRecordingPlayback(recording, offset = 0) {
+  // Al buscar otro segundo se congela el fotograma actual: el marco conserva
+  // su relación de aspecto y no aparece un panel de carga en su lugar.
+  if (state.playback.recording === recording) freezePlaybackFrame();
   stopRecordingPlayback(false);
   const duration = Math.max(0, Number(recording.duration_seconds) || 0);
   const safeOffset = Math.max(0, duration > 0 ? Math.min(offset, Math.max(0, duration - .1)) : offset);
@@ -2387,7 +2414,7 @@ function startRecordingPlayback(recording, offset = 0) {
   loading.hidden = false;
   errorBox.hidden = true;
   image.hidden = false;
-  image.onload = () => { loading.hidden = true; errorBox.hidden = true; };
+  image.onload = () => { loading.hidden = true; errorBox.hidden = true; clearPlaybackPoster(); };
   image.onerror = async () => {
     loading.hidden = true;
     if (state.playback.playing) {
@@ -2428,6 +2455,7 @@ function updatePlaybackProgress() {
   if (duration > 0 && current >= duration) {
     state.playback.offset = duration;
     state.playback.playing = false;
+    freezePlaybackFrame();
     $('#recordingPlaybackImage').removeAttribute('src');
     if (state.playback.timer !== null) clearInterval(state.playback.timer);
     state.playback.timer = null;
@@ -2454,6 +2482,7 @@ function stopRecordingPlayback(clearRecording = true) {
   const image = $('#recordingPlaybackImage');
   if (image) image.removeAttribute('src');
   if (clearRecording) {
+    clearPlaybackPoster();
     state.playback.recording = null;
     state.playback.offset = 0;
   }
@@ -2467,6 +2496,7 @@ function toggleRecordingPlayback() {
     state.playback.playing = false;
     if (state.playback.timer !== null) clearInterval(state.playback.timer);
     state.playback.timer = null;
+    freezePlaybackFrame();
     $('#recordingPlaybackImage').removeAttribute('src');
     $('#recordingPlayPause').textContent = 'Reproducir';
     updatePlaybackUI(state.playback.offset);
