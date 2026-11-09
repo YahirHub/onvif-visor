@@ -23,6 +23,7 @@ type recordingDeleteBatchResponse struct {
 	Deleted           []string `json:"deleted"`
 	DeletedCount      int      `json:"deleted_count"`
 	SkippedActive     int      `json:"skipped_active"`
+	SkippedProtected  int      `json:"skipped_protected,omitempty"`
 	SkippedPersons    int      `json:"skipped_persons,omitempty"`
 	SkippedUnanalyzed int      `json:"skipped_unanalyzed,omitempty"`
 }
@@ -50,6 +51,9 @@ func (a *App) forgetRecordingEvents(cameraID string, names []string) {
 }
 
 func (a *App) deleteRecordingArtifacts(ctx context.Context, cameraID, name string) error {
+	if a.isProtected(cameraID, name) {
+		return errRecordingProtected
+	}
 	if err := a.media.DeleteRecording(cameraID, name); err != nil {
 		return err
 	}
@@ -90,6 +94,8 @@ func (a *App) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, media.ErrRecordingNotFound):
 			writeError(w, http.StatusNotFound, "Grabación no encontrada.")
+		case errors.Is(err, errRecordingProtected):
+			writeError(w, http.StatusConflict, "La grabación está protegida; quita la protección para eliminarla.")
 		case errors.Is(err, media.ErrRecordingActive):
 			writeError(w, http.StatusConflict, "No se puede eliminar una grabación que todavía está activa.")
 		default:
@@ -164,6 +170,10 @@ func (a *App) handleDeleteRecordingsBatch(w http.ResponseWriter, r *http.Request
 		}
 		if file.Active {
 			result.SkippedActive++
+			continue
+		}
+		if a.isProtected(req.CameraID, file.Name) {
+			result.SkippedProtected++
 			continue
 		}
 		if req.WithoutPersons {

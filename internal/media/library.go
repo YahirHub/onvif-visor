@@ -32,6 +32,7 @@ type RecordingFile struct {
 	DurationSecond float64   `json:"duration_seconds"`
 	SizeBytes      int64     `json:"size_bytes"`
 	Active         bool      `json:"active"`
+	Protected      bool      `json:"protected"`
 }
 
 type RecordingStorageStats struct {

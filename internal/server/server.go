@@ -30,6 +30,7 @@ type Config struct {
 	Media     *media.Manager
 	Analytics *analytics.Manager
 	Assets    fs.FS
+	DataDir   string
 }
 
 type App struct {
@@ -40,6 +41,10 @@ type App struct {
 	assets      fs.FS
 	authEnabled bool
 	mux         *http.ServeMux
+
+	protectedMu   sync.Mutex
+	protectedSet  map[string]bool
+	protectedPath string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -103,6 +108,10 @@ func New(cfg Config) (*App, error) {
 		telegramNotifySem:    make(chan struct{}, 1),
 		telegramAuthFailures: make(map[int64][]time.Time),
 	}
+	if cfg.DataDir != "" {
+		app.protectedPath = filepath.Join(cfg.DataDir, "protected_recordings.json")
+		app.loadProtected()
+	}
 	app.routes()
 	if app.analytics != nil {
 		app.analytics.SetEventHandler(app.handleSmartAnalyticsEvent)
@@ -163,6 +172,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/recordings/delete-batch", a.handleDeleteRecordingsBatch)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/metadata", a.handleRecordingMetadata)
 	a.mux.HandleFunc("DELETE /api/recordings/{cameraID}/{name}", a.handleDeleteRecording)
+	a.mux.HandleFunc("POST /api/recordings/{cameraID}/{name}/protect", a.handleRecordingProtect)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/snapshot", a.handleRecordingSnapshot)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/play", a.handleRecordingPlayback)
 	a.mux.HandleFunc("GET /api/recordings/{cameraID}/{name}/download", a.handleRecordingDownload)

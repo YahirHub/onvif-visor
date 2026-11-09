@@ -1412,6 +1412,11 @@ dialog.analytics-dialog { width: min(96vw, 1180px); max-height: 92vh; }
 /* El sprite de iconos no debe ocupar layout ni usar estilo inline: la CSP lo bloquea. */
 .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 
+.playback-clip-row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .6rem; }
+.clip-marks { color: var(--text-2); font-size: .75rem; }
+.recording-card-action.protect.active { color: var(--accent); border-color: rgba(80,208,173,.45); }
+.recording-protected-badge { position: absolute; top: 8px; right: 8px; padding: .18rem .45rem; border-radius: 6px; background: rgba(80,208,173,.92); color: #06231b; font-size: .625rem; font-weight: 800; letter-spacing: .04em; }
+
 /* Pasada Android: la barra inferior dejaba 3 secciones fuera (7 destinos en
    una rejilla de 4 columnas y 58px), los campos pequeños provocaban el zoom
    automático al escribir y los diálogos quedaban centrados y estrechos. */

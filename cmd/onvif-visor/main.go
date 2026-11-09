@@ -277,7 +277,7 @@ func runServer(opts serverOptions) error {
 	if err != nil {
 		return fmt.Errorf("cargar interfaz: %w", err)
 	}
-	app, err := server.New(server.Config{Store: cameraStore, Accounts: accountStore, Media: mediaManager, Analytics: analyticsManager, Assets: assets})
+	app, err := server.New(server.Config{Store: cameraStore, Accounts: accountStore, Media: mediaManager, Analytics: analyticsManager, Assets: assets, DataDir: opts.DataDir})
 	if err != nil {
 		if analyticsManager != nil {
 			_ = analyticsManager.Close()

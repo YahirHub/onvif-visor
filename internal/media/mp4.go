@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,14 +17,21 @@ import (
 // audio solo se transcodifica a AAC cuando no cabe en MP4 (G.711 y similares).
 // El MP4 sale fragmentado para poder servirlo en streaming sin conocer antes
 // su tamaño final.
-func mp4RemuxArgs(path, videoCodec, audioCodec string) []string {
+func mp4RemuxArgs(path, videoCodec, audioCodec string, start, duration float64) []string {
 	args := []string{
 		"-hide_banner", "-loglevel", "error",
+	}
+	if start > 0 {
+		// -ss antes de -i busca por índice sin decodificar; con copia de
+		// stream el corte cae en el fotograma clave anterior, que para
+		// descargar un tramo es precisión suficiente.
+		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
+	}
+	args = append(args,
 		"-i", path,
 		"-map", "0:v:0",
 		"-map", "0:a?",
-		"-c:v", "copy",
-	}
+		"-c:v", "copy")
 	if videoCodec == "hevc" {
 		// hvc1 es la etiqueta que esperan QuickTime y los reproductores de Apple.
 		args = append(args, "-tag:v", "hvc1")
@@ -33,6 +41,9 @@ func mp4RemuxArgs(path, videoCodec, audioCodec string) []string {
 		args = append(args, "-c:a", "copy")
 	default:
 		args = append(args, "-c:a", "aac", "-b:a", "64k")
+	}
+	if duration > 0 {
+		args = append(args, "-t", strconv.FormatFloat(duration, 'f', 3, 64))
 	}
 	return append(args,
 		"-avoid_negative_ts", "make_zero",
@@ -83,7 +94,7 @@ func (m *Manager) probeStreamCodecs(ctx context.Context, path string) (video, au
 
 // DownloadMP4 sirve la grabación convertida a MP4 al vuelo. El archivo
 // original en Matroska no se toca.
-func (m *Manager) DownloadMP4(w http.ResponseWriter, r *http.Request, cameraID, name string) error {
+func (m *Manager) DownloadMP4(w http.ResponseWriter, r *http.Request, cameraID, name string, start, end float64) error {
 	path, err := m.RecordingPath(cameraID, name)
 	if err != nil {
 		return err
@@ -94,7 +105,11 @@ func (m *Manager) DownloadMP4(w http.ResponseWriter, r *http.Request, cameraID, 
 	defer m.releasePlayback()
 
 	videoCodec, audioCodec := m.probeStreamCodecs(r.Context(), path)
-	cmd := exec.CommandContext(r.Context(), m.ffmpeg, mp4RemuxArgs(path, videoCodec, audioCodec)...)
+	duration := 0.0
+	if end > start && start >= 0 {
+		duration = end - start
+	}
+	cmd := exec.CommandContext(r.Context(), m.ffmpeg, mp4RemuxArgs(path, videoCodec, audioCodec, start, duration)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -105,6 +120,9 @@ func (m *Manager) DownloadMP4(w http.ResponseWriter, r *http.Request, cameraID, 
 	}
 
 	downloadName := strings.TrimSuffix(name, ".mkv") + ".mp4"
+	if start > 0 || end > 0 {
+		downloadName = strings.TrimSuffix(name, ".mkv") + "-tramo.mp4"
+	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": downloadName}))
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "private, no-store")

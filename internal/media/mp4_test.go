@@ -21,7 +21,7 @@ func containsPair(args []string, first, second string) bool {
 }
 
 func TestMP4RemuxArgsHEVC(t *testing.T) {
-	args := mp4RemuxArgs("/rec/cam.mkv", "hevc", "aac")
+	args := mp4RemuxArgs("/rec/cam.mkv", "hevc", "aac", 0, 0)
 	if !containsPair(args, "-c:v", "copy") {
 		t.Fatalf("video must be copied, not re-encoded: %v", args)
 	}
@@ -37,7 +37,7 @@ func TestMP4RemuxArgsHEVC(t *testing.T) {
 }
 
 func TestMP4RemuxArgsH264ConAudioG711(t *testing.T) {
-	args := mp4RemuxArgs("/rec/cam.mkv", "h264", "pcm_alaw")
+	args := mp4RemuxArgs("/rec/cam.mkv", "h264", "pcm_alaw", 0, 0)
 	if containsPair(args, "-tag:v", "hvc1") {
 		t.Fatalf("h264 must not be tagged hvc1: %v", args)
 	}
@@ -76,7 +76,7 @@ func TestDownloadMP4GeneraMP4Valido(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/download?format=mp4", nil)
 	rec := httptest.NewRecorder()
-	if err := m.DownloadMP4(rec, req, "cam1", name); err != nil {
+	if err := m.DownloadMP4(rec, req, "cam1", name, 0, 0); err != nil {
 		t.Fatalf("DownloadMP4: %v", err)
 	}
 	body := rec.Body.Bytes()
@@ -103,5 +103,20 @@ func TestDownloadMP4GeneraMP4Valido(t *testing.T) {
 	}
 	if !strings.Contains(string(probeOut), "mp4") {
 		t.Fatalf("formato no reconocido como mp4: %s", probeOut)
+	}
+}
+
+func TestMP4RemuxArgsConTramo(t *testing.T) {
+	args := mp4RemuxArgs("/rec/cam.mkv", "hevc", "aac", 12.5, 30)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-ss 12.500") || !strings.Contains(joined, "-t 30.000") {
+		t.Fatalf("el tramo no aparece en los argumentos: %v", args)
+	}
+	if strings.Index(joined, "-ss") > strings.Index(joined, "-i /rec/cam.mkv") {
+		t.Fatalf("-ss debe ir antes de -i: %v", args)
+	}
+	sin := mp4RemuxArgs("/rec/cam.mkv", "hevc", "aac", 0, 0)
+	if strings.Contains(strings.Join(sin, " "), "-ss") || strings.Contains(strings.Join(sin, " "), " -t ") {
+		t.Fatalf("sin tramo no debe haber -ss ni -t: %v", sin)
 	}
 }

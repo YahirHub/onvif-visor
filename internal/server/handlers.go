@@ -597,6 +597,12 @@ func (a *App) handleRecordings(w http.ResponseWriter, r *http.Request) {
 	if !from.IsZero() && !to.IsZero() {
 		response.Timeline = filtered
 	}
+	for i := range response.Items {
+		response.Items[i].Protected = a.isProtected(cameraID, response.Items[i].Name)
+	}
+	for i := range response.Timeline {
+		response.Timeline[i].Protected = a.isProtected(cameraID, response.Timeline[i].Name)
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -676,7 +682,25 @@ func (a *App) handleRecordingDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(r.URL.Query().Get("format"), "mp4") {
-		if err := a.media.DownloadMP4(w, r, cameraID, name); err != nil {
+		var start, end float64
+		for _, param := range []struct {
+			name string
+			out  *float64
+		}{{"start", &start}, {"end", &end}} {
+			if raw := strings.TrimSpace(r.URL.Query().Get(param.name)); raw != "" {
+				parsed, parseErr := strconv.ParseFloat(raw, 64)
+				if parseErr != nil || parsed < 0 || parsed > 86400 {
+					writeError(w, http.StatusBadRequest, "tramo de descarga inválido")
+					return
+				}
+				*param.out = parsed
+			}
+		}
+		if end > 0 && end <= start {
+			writeError(w, http.StatusBadRequest, "el fin del tramo debe ser posterior al inicio")
+			return
+		}
+		if err := a.media.DownloadMP4(w, r, cameraID, name, start, end); err != nil {
 			switch {
 			case errors.Is(err, media.ErrRecordingNotFound):
 				writeError(w, http.StatusNotFound, "grabación no encontrada")

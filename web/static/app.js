@@ -35,7 +35,7 @@ const state = {
   sessions: [],
   profile: null,
   telegram: null,
-  playback: { recording: null, offset: 0, startedAt: 0, timer: null, playing: false },
+  playback: { recording: null, offset: 0, startedAt: 0, timer: null, playing: false, clipIn: null, clipOut: null },
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -2178,6 +2178,12 @@ function renderRecordingCards(recordings) {
       badge.textContent = 'GRABANDO';
       preview.append(badge);
     }
+    if (recording.protected) {
+      const badge = document.createElement('span');
+      badge.className = 'recording-protected-badge';
+      badge.textContent = 'PROTEGIDA';
+      preview.append(badge);
+    }
     preview.addEventListener('click', () => selectRecording(recording));
 
     const body = document.createElement('div');
@@ -2199,6 +2205,33 @@ function renderRecordingCards(recordings) {
 
     const actions = document.createElement('div');
     actions.className = 'recording-card-actions';
+    const protectBtn = document.createElement('button');
+    protectBtn.type = 'button';
+    protectBtn.className = 'recording-card-action protect';
+    protectBtn.classList.toggle('active', Boolean(recording.protected));
+    protectBtn.textContent = recording.protected ? 'Protegida' : 'Proteger';
+    protectBtn.title = recording.protected
+      ? 'Quitar la protección: la grabación podrá eliminarse'
+      : 'Proteger: no se eliminará ni en la limpieza automática';
+    protectBtn.addEventListener('click', async () => {
+      protectBtn.disabled = true;
+      try {
+        await api(`${recordingBaseURL(recording)}/protect`, {
+          method: 'POST',
+          body: JSON.stringify({ protected: !recording.protected }),
+        });
+        recording.protected = !recording.protected;
+        protectBtn.classList.toggle('active', recording.protected);
+        protectBtn.textContent = recording.protected ? 'Protegida' : 'Proteger';
+        setStatus(recording.protected ? 'Grabación protegida: no se eliminará.' : 'Protección retirada.', true);
+      } catch (_) {
+        setStatus('No se pudo cambiar la protección de la grabación.', false);
+      } finally {
+        protectBtn.disabled = false;
+      }
+    });
+    actions.append(protectBtn);
+
     const personSegment = bestPersonSegmentForRecording(recording);
     if (personSegment) {
       const jumpPerson = document.createElement('button');
@@ -2340,8 +2373,11 @@ async function loadDedicatedPlayback() {
     $('#recordingPlayerDate').textContent = new Date(recording.started_at).toLocaleString();
     $('#recordingPlayerMeta').textContent = formatDuration(recording.duration_seconds) + ' · ' + formatBytes(recording.size_bytes);
     $('#recordingDownload').href = recordingBaseURL(recording) + '/download?format=mp4';
-    $('#recordingDeleteBtn').disabled = Boolean(recording.active);
-    $('#recordingDeleteBtn').title = recording.active ? 'La grabación activa no se puede eliminar' : '';
+    resetClipMarks();
+    $('#recordingDeleteBtn').disabled = Boolean(recording.active) || Boolean(recording.protected);
+    $('#recordingDeleteBtn').title = recording.active
+      ? 'La grabación activa no se puede eliminar'
+      : (recording.protected ? 'La grabación está protegida; quita la protección para eliminarla' : '');
     $('#recordingScrubber').max = String(Math.max(.1, Number(recording.duration_seconds) || .1));
     $('#recordingTotalTime').textContent = formatClock(recording.duration_seconds);
     $('#recordingPlaybackLoading').hidden = false;
@@ -2509,6 +2545,28 @@ function startRecordingPlayback(recording, offset = 0) {
   $('#recordingPlayPause').textContent = 'Pausar';
   updatePlaybackUI(safeOffset);
   state.playback.timer = setInterval(updatePlaybackProgress, 400);
+}
+
+function resetClipMarks() {
+  state.playback.clipIn = null;
+  state.playback.clipOut = null;
+  updateClipUI();
+}
+
+function updateClipUI() {
+  const { clipIn, clipOut, recording } = state.playback;
+  const marks = $('#clipMarks');
+  const link = $('#clipDownload');
+  if (!marks || !link) return;
+  const fmt = (value) => (value === null || value === undefined ? '—' : formatClock(value));
+  marks.textContent = clipIn === null && clipOut === null
+    ? 'Marca un inicio y un fin para descargar solo ese tramo en MP4.'
+    : `Tramo: ${fmt(clipIn)} → ${fmt(clipOut)}`;
+  const valid = Boolean(recording) && clipIn !== null && clipOut !== null && clipOut > clipIn;
+  link.hidden = !valid;
+  if (valid) {
+    link.href = `${recordingBaseURL(recording)}/download?format=mp4&start=${clipIn.toFixed(1)}&end=${clipOut.toFixed(1)}`;
+  }
 }
 
 function currentPlaybackOffset() {
@@ -3892,6 +3950,16 @@ document.addEventListener('keydown', (event) => {
 $('#recordingsRefreshBtn').addEventListener('click', loadRecordings);
 $('#analyticsReindexBtn').addEventListener('click', reindexAnalytics);
 $('#recordingDeleteBtn').addEventListener('click', deleteCurrentRecording);
+$('#clipInBtn').addEventListener('click', () => {
+  state.playback.clipIn = Math.max(0, Math.floor(currentPlaybackOffset()));
+  if (state.playback.clipOut !== null && state.playback.clipOut <= state.playback.clipIn) state.playback.clipOut = null;
+  updateClipUI();
+});
+$('#clipOutBtn').addEventListener('click', () => {
+  state.playback.clipOut = Math.max(0, Math.ceil(currentPlaybackOffset()));
+  if (state.playback.clipIn !== null && state.playback.clipOut <= state.playback.clipIn) state.playback.clipIn = null;
+  updateClipUI();
+});
 $('#recordingsDeleteWithoutPersonsBtn').addEventListener('click', deleteWithoutPersonRecordings);
 $('#recordingsDeleteFilteredBtn').addEventListener('click', deleteFilteredRecordings);
 $('#recordingsDeleteAllBtn').addEventListener('click', deleteAllRecordings);

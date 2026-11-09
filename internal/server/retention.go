@@ -78,7 +78,7 @@ func (a *App) applyRetention() {
 			continue
 		}
 		for _, file := range files {
-			if file.Active {
+			if file.Active || a.isProtected(cameraID, file.Name) {
 				continue
 			}
 			candidates = append(candidates, retentionCandidate{
