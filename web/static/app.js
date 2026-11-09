@@ -20,6 +20,7 @@ const state = {
   monitorSelected: [],
   monitorFocus: null,
   monitorKeepBackground: false,
+  cameraSignal: new Map(),
   recordingCameraID: '',
   recordingDate: '',
   recordingName: '',
@@ -695,6 +696,7 @@ function renderCameras() {
       image.hidden = false;
       statusChip.classList.remove('offline');
       statusText.textContent = 'EN LÍNEA';
+      setCameraSignal(camera.id, true);
     });
     image.addEventListener('error', () => {
       card.classList.remove('loading');
@@ -702,6 +704,7 @@ function renderCameras() {
       fallback.hidden = false;
       statusChip.classList.add('offline');
       statusText.textContent = 'SIN VISTA';
+      setCameraSignal(camera.id, false);
     });
     image.src = `/api/cameras/${encodeURIComponent(camera.id)}/snapshot?v=${state.snapshotRevision}`;
 
@@ -739,6 +742,26 @@ function renderCameras() {
   refreshIcons();
 }
 
+
+// Aviso de portada: si la imagen en vivo de una cámara no llega, se
+// anuncia encima de la rejilla hasta que vuelve a responder.
+function setCameraSignal(cameraID, ok) {
+  if (state.cameraSignal.get(cameraID) === ok) return;
+  state.cameraSignal.set(cameraID, ok);
+  updateSignalBanner();
+}
+
+function updateSignalBanner() {
+  const banner = $('#cameraSignalAlert');
+  if (!banner) return;
+  const down = state.cameras.filter(camera => state.cameraSignal.get(camera.id) === false);
+  banner.hidden = down.length === 0;
+  if (down.length) {
+    banner.textContent = down.length === 1
+      ? `${down[0].name} está sin señal: no llega su imagen en vivo.`
+      : `${down.map(camera => camera.name).join(', ')} están sin señal: no llega su imagen en vivo.`;
+  }
+}
 
 function syncCameraSettingsMode() {
   const mode = $('#cameraSettingsMode').value;
