@@ -675,6 +675,21 @@ func (a *App) handleRecordingDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no se pudo abrir la grabación")
 		return
 	}
+	if strings.EqualFold(r.URL.Query().Get("format"), "mp4") {
+		if err := a.media.DownloadMP4(w, r, cameraID, name); err != nil {
+			switch {
+			case errors.Is(err, media.ErrRecordingNotFound):
+				writeError(w, http.StatusNotFound, "grabación no encontrada")
+			case errors.Is(err, media.ErrTooManyPlayback):
+				writeError(w, http.StatusTooManyRequests, "hay demasiadas descargas simultáneas")
+			default:
+				if r.Context().Err() == nil {
+					logCameraError(cameraID, "recording-download-mp4", err)
+				}
+			}
+		}
+		return
+	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	w.Header().Set("Content-Type", "video/x-matroska")
 	w.Header().Set("Cache-Control", "private, no-store")

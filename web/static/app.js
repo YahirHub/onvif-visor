@@ -2269,7 +2269,7 @@ async function loadDedicatedPlayback() {
     $('#recordingPlayerTitle').textContent = new Date(recording.started_at).toLocaleTimeString();
     $('#recordingPlayerDate').textContent = new Date(recording.started_at).toLocaleString();
     $('#recordingPlayerMeta').textContent = formatDuration(recording.duration_seconds) + ' · ' + formatBytes(recording.size_bytes);
-    $('#recordingDownload').href = recordingBaseURL(recording) + '/download';
+    $('#recordingDownload').href = recordingBaseURL(recording) + '/download?format=mp4';
     $('#recordingDeleteBtn').disabled = Boolean(recording.active);
     $('#recordingDeleteBtn').title = recording.active ? 'La grabación activa no se puede eliminar' : '';
     $('#recordingScrubber').max = String(Math.max(.1, Number(recording.duration_seconds) || .1));
