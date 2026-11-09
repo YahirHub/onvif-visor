@@ -99,3 +99,24 @@ func TestLiveHubStopOnlyWithoutSubscribers(t *testing.T) {
 		t.Fatal("stopped hub must be removed from the manager")
 	}
 }
+
+func TestLiveFFmpegArgsSinOpcionesInexistentes(t *testing.T) {
+	// Regresión: -rw_timeout no existe en el FFmpeg 9 del host y el directo
+	// se quedaba sin fotogramas. Ningún argumento puede volver a colarse sin
+	// probarse contra ese FFmpeg.
+	args := liveFFmpegArgs("rtsp://camara/stream", "full")
+	for _, arg := range args {
+		if arg == "-rw_timeout" {
+			t.Fatal("live args must not use -rw_timeout: not supported by host ffmpeg")
+		}
+	}
+	joined := ""
+	for _, arg := range args {
+		joined += arg + " "
+	}
+	for _, want := range []string{"-rtsp_transport tcp", "nobuffer", "image2pipe", "mjpeg"} {
+		if !bytes.Contains([]byte(joined), []byte(want)) {
+			t.Fatalf("live args missing %q: %s", want, joined)
+		}
+	}
+}

@@ -82,9 +82,12 @@ func (m *Manager) runHub(h *liveHub, streamURI, profile string) {
 	}
 }
 
-func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
+// liveFFmpegArgs son los argumentos del FFmpeg del directo. No usar opciones
+// nuevas sin probarlas en el FFmpeg del host: -rw_timeout no existe en
+// FFmpeg 9 y el proceso moría al arrancar, dejando el directo sin fotogramas.
+func liveFFmpegArgs(streamURI, profile string) []string {
 	filter, quality := liveProfileArgs(profile)
-	args := []string{
+	return []string{
 		"-hide_banner", "-loglevel", "error",
 		"-rtsp_transport", "tcp",
 		"-fflags", "nobuffer",
@@ -92,7 +95,6 @@ func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
 		"-analyzeduration", "0",
 		"-probesize", "32768",
 		"-max_delay", "0",
-		"-rw_timeout", "5000000",
 		"-i", streamURI,
 		"-an",
 		"-vf", filter,
@@ -102,7 +104,10 @@ func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
 		"-vcodec", "mjpeg",
 		"pipe:1",
 	}
-	cmd := exec.CommandContext(h.ctx, m.ffmpeg, args...)
+}
+
+func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
+	cmd := exec.CommandContext(h.ctx, m.ffmpeg, liveFFmpegArgs(streamURI, profile)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return false
@@ -115,6 +120,10 @@ func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
 	readDone := make(chan error, 1)
 	go readLatestJPEGFrames(stdout, frames, readDone)
 	streamed := false
+	// Vigilante de silencio: si la conexión RTSP se cuelga sin datos y sin
+	// morir, a los 15 s se mata el proceso y runHub lo relanza.
+	idle := time.NewTimer(15 * time.Second)
+	defer idle.Stop()
 	for {
 		select {
 		case <-h.ctx.Done():
@@ -123,12 +132,23 @@ func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
 		case <-readDone:
 			_ = cmd.Wait()
 			return streamed
+		case <-idle.C:
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return streamed
 		case frame := <-frames:
 			if len(frame) == 0 {
 				continue
 			}
 			streamed = true
 			h.publish(frame)
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(15 * time.Second)
 		}
 	}
 }
