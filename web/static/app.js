@@ -3859,6 +3859,36 @@ if (recordingsSummaryBody && recordingsSummaryToggle) {
     try { localStorage.setItem('onvif.recordings.summaryOpen', summaryOpen ? '1' : '0'); } catch (_) {}
   });
 }
+// PWA: se registra al cargar para poder instalar la app en Android.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+// Atajos de teclado (escritorio): en Cámaras, 1-9 abre esa cámara; en
+// Multivista, 1-9 enfoca ese cuadro y F alterna la pantalla completa.
+// Esc ya sale del foco (registrado con la multivista).
+document.addEventListener('keydown', (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (document.querySelector('dialog[open]')) return;
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable)) return;
+  if (/^[1-9]$/.test(event.key)) {
+    const index = Number(event.key) - 1;
+    if (state.currentView === 'monitor' && state.monitorSelected[index]) {
+      state.monitorFocus = state.monitorSelected[index];
+      renderMonitor();
+    } else if (state.currentView === 'cameras' && state.cameras[index]) {
+      openMonitor(state.cameras[index].id);
+    }
+    return;
+  }
+  if (state.currentView === 'monitor' && event.key.toLowerCase() === 'f') {
+    toggleMonitorFullscreen();
+  }
+});
+
 $('#recordingsRefreshBtn').addEventListener('click', loadRecordings);
 $('#analyticsReindexBtn').addEventListener('click', reindexAnalytics);
 $('#recordingDeleteBtn').addEventListener('click', deleteCurrentRecording);
