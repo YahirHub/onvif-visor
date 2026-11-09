@@ -10,29 +10,80 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 var ErrTooManyViewers = errors.New("too many live viewers for camera")
 
 const maxJPEGFrameBytes = 8 << 20
 
-func (m *Manager) Live(w http.ResponseWriter, r *http.Request, cameraID, streamURI string) error {
-	if !m.acquireViewer(cameraID) {
-		return ErrTooManyViewers
-	}
-	defer m.releaseViewer(cameraID)
+// Un hub por cámara y perfil de calidad: un solo FFmpeg alimenta a todos los
+// espectadores del mismo stream y republica cada fotograma al momento. Antes
+// cada espectador lanzaba su propio FFmpeg, así que una cámara podía
+// decodificarse cuatro veces a la vez entre la vista individual, la multivista
+// y otros navegadores. Mantener el mismo stream para todos también evita
+// cambios de relación de aspecto al agregar una cámara a la multivista.
+type liveHub struct {
+	key string
 
-	lowBandwidth := strings.EqualFold(r.URL.Query().Get("quality"), "low")
-	// Mantener el mismo stream evita cambios de relación de aspecto al agregar
-	// una cámara a multivista. El perfil ligero reduce FPS/resolución después
-	// de decodificar, sin cambiar al substream del firmware.
-	filter := "fps=8,scale=960:-2:force_original_aspect_ratio=decrease"
-	quality := "5"
-	if lowBandwidth {
-		filter = "fps=5,scale=640:-2:force_original_aspect_ratio=decrease"
-		quality = "6"
-	}
+	mu     sync.Mutex
+	subs   map[chan []byte]struct{}
+	timer  *time.Timer
+	ctx    context.Context
+	cancel context.CancelFunc
+}
 
+func liveProfileArgs(profile string) (filter, quality string) {
+	// El perfil ligero reduce FPS y resolución después de decodificar, sin
+	// cambiar al substream del firmware.
+	if profile == "low" {
+		return "fps=5,scale=640:-2:force_original_aspect_ratio=decrease", "6"
+	}
+	return "fps=8,scale=960:-2:force_original_aspect_ratio=decrease", "5"
+}
+
+func (m *Manager) hubFor(cameraID, profile, streamURI string) *liveHub {
+	key := cameraID + "|" + profile
+	m.hubsMu.Lock()
+	defer m.hubsMu.Unlock()
+	if h, ok := m.hubs[key]; ok && h.ctx.Err() == nil {
+		return h
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h := &liveHub{key: key, subs: make(map[chan []byte]struct{}), ctx: ctx, cancel: cancel}
+	m.hubs[key] = h
+	go m.runHub(h, streamURI, profile)
+	return h
+}
+
+// runHub mantiene vivo el FFmpeg del hub mientras tenga sentido: si la cámara
+// se corta, el proceso se relanza con espera creciente y los espectadores no
+// pierden su conexión, solo dejan de recibir fotogramas unos segundos. El
+// navegador conserva el último fotograma del MJPEG, sin error ni corte seco.
+func (m *Manager) runHub(h *liveHub, streamURI, profile string) {
+	backoff := time.Second
+	for {
+		streamed := m.streamHubOnce(h, streamURI, profile)
+		if h.ctx.Err() != nil {
+			return
+		}
+		if streamed {
+			backoff = time.Second
+		}
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func (m *Manager) streamHubOnce(h *liveHub, streamURI, profile string) bool {
+	filter, quality := liveProfileArgs(profile)
 	args := []string{
 		"-hide_banner", "-loglevel", "error",
 		"-rtsp_transport", "tcp",
@@ -41,6 +92,7 @@ func (m *Manager) Live(w http.ResponseWriter, r *http.Request, cameraID, streamU
 		"-analyzeduration", "0",
 		"-probesize", "32768",
 		"-max_delay", "0",
+		"-rw_timeout", "5000000",
 		"-i", streamURI,
 		"-an",
 		"-vf", filter,
@@ -50,21 +102,99 @@ func (m *Manager) Live(w http.ResponseWriter, r *http.Request, cameraID, streamU
 		"-vcodec", "mjpeg",
 		"pipe:1",
 	}
-	streamCtx, cancelStream := context.WithCancel(r.Context())
-	defer cancelStream()
-	cmd := exec.CommandContext(streamCtx, m.ffmpeg, args...)
+	cmd := exec.CommandContext(h.ctx, m.ffmpeg, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return false
 	}
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
-		return err
+		return false
 	}
-
 	frames := make(chan []byte, 1)
 	readDone := make(chan error, 1)
 	go readLatestJPEGFrames(stdout, frames, readDone)
+	streamed := false
+	for {
+		select {
+		case <-h.ctx.Done():
+			_ = cmd.Wait()
+			return streamed
+		case <-readDone:
+			_ = cmd.Wait()
+			return streamed
+		case frame := <-frames:
+			if len(frame) == 0 {
+				continue
+			}
+			streamed = true
+			h.publish(frame)
+		}
+	}
+}
+
+func (h *liveHub) publish(frame []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		// Cada suscriptor conserva solo el fotograma más reciente: un cliente
+		// lento salta fotogramas viejos en vez de acumular retraso.
+		pushLatestFrame(ch, frame)
+	}
+}
+
+func (h *liveHub) subscribe() chan []byte {
+	ch := make(chan []byte, 1)
+	h.mu.Lock()
+	if h.timer != nil {
+		h.timer.Stop()
+		h.timer = nil
+	}
+	h.subs[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch
+}
+
+func (m *Manager) unsubscribe(h *liveHub, ch chan []byte) {
+	h.mu.Lock()
+	delete(h.subs, ch)
+	empty := len(h.subs) == 0
+	if empty && h.timer == nil {
+		// Gracia de 3 s antes de matar el FFmpeg: navegar entre la vista de
+		// cámara y la multivista no debe relanzar el proceso cada vez.
+		h.timer = time.AfterFunc(3*time.Second, func() { m.stopHub(h) })
+	}
+	h.mu.Unlock()
+}
+
+func (m *Manager) stopHub(h *liveHub) {
+	h.mu.Lock()
+	empty := len(h.subs) == 0
+	h.mu.Unlock()
+	if !empty {
+		return
+	}
+	m.hubsMu.Lock()
+	if m.hubs[h.key] == h {
+		delete(m.hubs, h.key)
+	}
+	m.hubsMu.Unlock()
+	h.cancel()
+}
+
+func (m *Manager) Live(w http.ResponseWriter, r *http.Request, cameraID, streamURI string) error {
+	if !m.acquireViewer(cameraID) {
+		return ErrTooManyViewers
+	}
+	defer m.releaseViewer(cameraID)
+
+	profile := "full"
+	if strings.EqualFold(r.URL.Query().Get("quality"), "low") {
+		profile = "low"
+	}
+	hub := m.hubFor(cameraID, profile, streamURI)
+	frames := hub.subscribe()
+	defer m.unsubscribe(hub, frames)
 
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=onvifframe")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
@@ -75,46 +205,28 @@ func (m *Manager) Live(w http.ResponseWriter, r *http.Request, cameraID, streamU
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
-	var streamErr error
-streamLoop:
 	for {
 		select {
 		case <-r.Context().Done():
-			break streamLoop
-		case err := <-readDone:
-			streamErr = err
-			break streamLoop
+			return nil
 		case frame := <-frames:
 			if len(frame) == 0 {
 				continue
 			}
 			if _, err := fmt.Fprintf(w, "--onvifframe\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
-				streamErr = err
-				break streamLoop
+				return err
 			}
 			if _, err := w.Write(frame); err != nil {
-				streamErr = err
-				break streamLoop
+				return err
 			}
 			if _, err := io.WriteString(w, "\r\n"); err != nil {
-				streamErr = err
-				break streamLoop
+				return err
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
 	}
-
-	cancelStream()
-	waitErr := cmd.Wait()
-	if r.Context().Err() != nil {
-		return nil
-	}
-	if streamErr != nil {
-		return streamErr
-	}
-	return waitErr
 }
 
 func readLatestJPEGFrames(src io.Reader, frames chan []byte, done chan<- error) {

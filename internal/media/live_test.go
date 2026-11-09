@@ -3,7 +3,9 @@ package media
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"testing"
+	"time"
 )
 
 func TestSplitJPEGFrames(t *testing.T) {
@@ -44,5 +46,56 @@ func TestPushLatestFrameDropsStaleFrame(t *testing.T) {
 	pushLatestFrame(frames, []byte("new"))
 	if got := string(<-frames); got != "new" {
 		t.Fatalf("frame = %q, want newest frame", got)
+	}
+}
+
+func TestLiveHubPublishReachesSubscribers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := &liveHub{subs: make(map[chan []byte]struct{}), ctx: ctx, cancel: cancel}
+	ch := h.subscribe()
+	h.publish([]byte("frame-1"))
+	select {
+	case got := <-ch:
+		if string(got) != "frame-1" {
+			t.Fatalf("frame = %q, want frame-1", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not receive the published frame")
+	}
+	// Un suscriptor lento conserva solo el fotograma más reciente.
+	h.publish([]byte("frame-2"))
+	h.publish([]byte("frame-3"))
+	select {
+	case got := <-ch:
+		if string(got) != "frame-3" {
+			t.Fatalf("frame = %q, want newest frame-3", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not receive the newest frame")
+	}
+}
+
+func TestLiveHubStopOnlyWithoutSubscribers(t *testing.T) {
+	m := &Manager{hubs: make(map[string]*liveHub)}
+	ctx, cancel := context.WithCancel(context.Background())
+	h := &liveHub{key: "cam|full", subs: make(map[chan []byte]struct{}), ctx: ctx, cancel: cancel}
+	m.hubs[h.key] = h
+	ch := h.subscribe()
+	m.stopHub(h)
+	if ctx.Err() != nil {
+		t.Fatal("hub with subscribers must not stop")
+	}
+	m.unsubscribe(h, ch)
+	// La baja del último suscriptor programa la parada con gracia; no es inmediata.
+	if ctx.Err() != nil {
+		t.Fatal("hub must keep its grace period after the last unsubscribe")
+	}
+	m.stopHub(h)
+	if ctx.Err() == nil {
+		t.Fatal("hub without subscribers must stop")
+	}
+	if _, ok := m.hubs[h.key]; ok {
+		t.Fatal("stopped hub must be removed from the manager")
 	}
 }

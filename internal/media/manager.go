@@ -18,6 +18,8 @@ type Manager struct {
 
 	mu              sync.Mutex
 	liveViewers     map[string]int
+	hubsMu          sync.Mutex
+	hubs            map[string]*liveHub
 	playbackViewers int
 	recorders       map[string]*recording
 	compressionSem  chan struct{}
@@ -67,6 +69,7 @@ func New(ffmpegPath, recordingsDir string) (*Manager, error) {
 		ffprobe:        ffprobe,
 		recordingsDir:  filepath.Clean(recordingsDir),
 		liveViewers:    make(map[string]int),
+		hubs:           make(map[string]*liveHub),
 		recorders:      make(map[string]*recording),
 		compressionSem: make(chan struct{}, 1),
 		durationCache:  make(map[string]durationCacheEntry),
